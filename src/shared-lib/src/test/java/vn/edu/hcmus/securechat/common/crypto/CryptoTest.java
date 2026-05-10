@@ -53,7 +53,7 @@ class CryptoTest {
         byte[] encrypted = AesGcmCipher.encrypt(key, plaintext);
 
         // Tamper with ciphertext
-        encrypted[15] ^= 0xFF;
+        encrypted[15] ^= (byte) 0xFF;
 
         assertThrows(MacVerificationException.class, () -> {
             AesGcmCipher.decrypt(key, encrypted);
@@ -70,9 +70,9 @@ class CryptoTest {
         byte[] expectedCiphertextAndTag = HEX.parseHex(tv.get("ciphertext_and_tag").asText());
 
         // Encrypt với nonce cố định (chỉ dùng trong test vector verification)
-        org.bouncycastle.crypto.modes.GCMBlockCipher cipher =
-                new org.bouncycastle.crypto.modes.GCMBlockCipher(
-                        new org.bouncycastle.crypto.engines.AESEngine());
+        org.bouncycastle.crypto.modes.GCMModeCipher cipher =
+                org.bouncycastle.crypto.modes.GCMBlockCipher.newInstance(
+                        org.bouncycastle.crypto.engines.AESEngine.newInstance());
         cipher.init(true, new org.bouncycastle.crypto.params.AEADParameters(
                 new org.bouncycastle.crypto.params.KeyParameter(key), 128, nonce, null));
         byte[] cipherAndTag = new byte[cipher.getOutputSize(plaintext.length)];

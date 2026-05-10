@@ -23,8 +23,8 @@ public class TestVectorPrecompute {
         byte[] plaintext = "SecureChat-TestVector-v1".getBytes(StandardCharsets.UTF_8);
 
         // Dùng BouncyCastle trực tiếp với nonce cố định
-        org.bouncycastle.crypto.engines.AESEngine engine = new org.bouncycastle.crypto.engines.AESEngine();
-        org.bouncycastle.crypto.modes.GCMBlockCipher gcm = new org.bouncycastle.crypto.modes.GCMBlockCipher(engine);
+        org.bouncycastle.crypto.BlockCipher engine = org.bouncycastle.crypto.engines.AESEngine.newInstance();
+        org.bouncycastle.crypto.modes.GCMModeCipher gcm = org.bouncycastle.crypto.modes.GCMBlockCipher.newInstance(engine);
         gcm.init(true, new org.bouncycastle.crypto.params.AEADParameters(
                 new org.bouncycastle.crypto.params.KeyParameter(aesKey), 128, aesNonce, null));
         byte[] cipherAndTag = new byte[gcm.getOutputSize(plaintext.length)];

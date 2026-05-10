@@ -1,6 +1,5 @@
 package vn.edu.hcmus.securechat.common.protocol;
 
-import java.nio.charset.StandardCharsets;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;

@@ -1,6 +1,8 @@
 package vn.edu.hcmus.securechat.common.exception;
 
 public class PkiException extends SecureChatException {
+    private static final long serialVersionUID = 1L;
+
     public PkiException(String message) {
         super(message);
     }

@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.modes.GCMModeCipher;
 import org.bouncycastle.crypto.modes.GCMBlockCipher;
 import org.bouncycastle.crypto.params.AEADParameters;
 import org.bouncycastle.crypto.params.KeyParameter;
@@ -23,7 +24,7 @@ public class AesGcmCipher {
             byte[] nonce = new byte[NONCE_SIZE];
             new SecureRandom().nextBytes(nonce); // sinh ngẫu nhiên mỗi lần gọi
 
-            GCMBlockCipher cipher = new GCMBlockCipher(new AESEngine());
+            GCMModeCipher cipher = GCMBlockCipher.newInstance(AESEngine.newInstance());
             cipher.init(true, new AEADParameters(new KeyParameter(key), TAG_BITS, nonce, null));
 
             byte[] cipherAndTag = new byte[cipher.getOutputSize(plaintext.length)];
@@ -49,7 +50,7 @@ public class AesGcmCipher {
             byte[] nonce      = Arrays.copyOfRange(cipherData, 0, NONCE_SIZE);
             byte[] cipherText = Arrays.copyOfRange(cipherData, NONCE_SIZE, cipherData.length);
 
-            GCMBlockCipher cipher = new GCMBlockCipher(new AESEngine());
+            GCMModeCipher cipher = GCMBlockCipher.newInstance(AESEngine.newInstance());
             cipher.init(false, new AEADParameters(new KeyParameter(key), TAG_BITS, nonce, null));
 
             byte[] plaintext = new byte[cipher.getOutputSize(cipherText.length)];
