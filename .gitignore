@@ -1,0 +1,38 @@
+# === Build output ===
+target/
+*.class
+*.jar
+*.war
+
+# === IDE ===
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Logs ===
+logs/
+*.log
+
+# === Database ===
+*.db
+*.sqlite
+
+# === Environment ===
+.env
+.env.local
+
+# === Python venv (nếu có) ===
+.venv/
+
+# === Maven wrapper ===
+.mvn/wrapper/maven-wrapper.jar
