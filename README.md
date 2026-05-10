@@ -4,7 +4,7 @@ Chào mừng đến với dự án **SecureChat E2EE 2.0**. Hệ thống Nhắn 
 
 ## 1. Môi trường phát triển bắt buộc
 
-- **Java Development Kit (JDK)**: Bắt buộc phiên bản **Java 17 LTS**.
+- **Java Development Kit (JDK)**: Bắt buộc phiên bản **Java 25 LTS**.
 - **Build Tool**: **Apache Maven 3.9+**
 - **IDE**: IntelliJ IDEA, Eclipse hoặc VSCode (Khuyến nghị dùng IntelliJ).
 
@@ -13,12 +13,12 @@ Chào mừng đến với dự án **SecureChat E2EE 2.0**. Hệ thống Nhắn 
 Nếu bạn gõ `mvn -v` trong Terminal và nhận được lỗi *“mvn is not recognized…”* hoặc lỗi *“The JAVA_HOME environment variable is not defined correctly”*, hãy làm theo các bước sau:
 
 **Bước 1: Cài đặt và cấu hình JAVA_HOME (Bắt buộc)**
-1. Tải và cài đặt **Java JDK 17** (nếu chưa cài). Mặc định Java sẽ được cài vào thư mục như `C:\Program Files\Java\jdk-17`.
+1. Tải và cài đặt **Java JDK 25** (nếu chưa cài). Mặc định Java sẽ được cài vào thư mục như `C:\Program Files\Java\jdk-25`.
 2. Nhấn phím `Windows`, gõ "Environment Variables" và chọn **Edit the system environment variables**.
 3. Bấm vào nút **Environment Variables...** ở góc dưới cùng.
 4. Ở phần **System variables**, bấm **New** để tạo biến mới:
    - Tên biến (Variable name): `JAVA_HOME`
-   - Giá trị (Variable value): Đường dẫn đến thư mục cài đặt JDK 17 (ví dụ: `C:\Program Files\Java\jdk-17`).
+   - Giá trị (Variable value): Đường dẫn đến thư mục cài đặt JDK 25 (ví dụ: `C:\Program Files\Java\jdk-25`).
 
 **Bước 2: Cài đặt Maven**
 1. Truy cập trang chủ Maven: [https://maven.apache.org/download.cgi](https://maven.apache.org/download.cgi)

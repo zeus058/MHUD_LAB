@@ -95,7 +95,7 @@ Commit message `fix`, `update`, `wip` sẽ bị yêu cầu rebase trước khi m
 
 | Thành phần | Phiên bản bắt buộc | Ghi chú |
 |------------|-------------------|---------|
-| Java | **17 LTS** (OpenJDK hoặc Eclipse Temurin) | Không dùng Java 8, 11, 21+ |
+| Java | **25 LTS** (OpenJDK hoặc Eclipse Temurin) | Sử dụng bản LTS mới nhất |
 | BouncyCastle | `bcprov-jdk18on:1.78.1` + `bcpkix-jdk18on:1.78.1` | Cả hai artifact bắt buộc |
 | Build tool | **Maven 3.9+**, file `pom.xml` commit vào repo | Không dùng Gradle (thống nhất 1 tool) |
 | SQLite JDBC | `org.xerial:sqlite-jdbc:3.45.3.0` | JDBC thuần Java |
