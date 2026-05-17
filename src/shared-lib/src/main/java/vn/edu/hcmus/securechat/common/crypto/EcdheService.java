@@ -46,7 +46,7 @@ public final class EcdheService {
      */
     public static KeyPair generateKeyPair() throws CryptoException {
         try {
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance(KEY_ALGORITHM, "BC");
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(KEY_ALGORITHM);
             kpg.initialize(new ECGenParameterSpec(CURVE_NAME));
             KeyPair pair = kpg.generateKeyPair();
             log.debug("ECDHE ephemeral KeyPair generated (curve={})", CURVE_NAME);
@@ -70,7 +70,7 @@ public final class EcdheService {
     public static PublicKey decodePublicKey(String base64PublicKey) throws CryptoException {
         try {
             byte[] keyBytes = Base64.getDecoder().decode(base64PublicKey);
-            KeyFactory kf = KeyFactory.getInstance(KEY_ALGORITHM, "BC");
+            KeyFactory kf = KeyFactory.getInstance(KEY_ALGORITHM);
             return kf.generatePublic(new X509EncodedKeySpec(keyBytes));
         } catch (Exception e) {
             throw new CryptoException("Failed to decode ECDHE public key", e);
@@ -82,7 +82,7 @@ public final class EcdheService {
      */
     public static PublicKey decodePublicKey(byte[] publicKeyBytes) throws CryptoException {
         try {
-            KeyFactory kf = KeyFactory.getInstance(KEY_ALGORITHM, "BC");
+            KeyFactory kf = KeyFactory.getInstance(KEY_ALGORITHM);
             return kf.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
         } catch (Exception e) {
             throw new CryptoException("Failed to decode ECDHE public key bytes", e);
@@ -100,7 +100,7 @@ public final class EcdheService {
             throws CryptoException {
         byte[] fullSecret = null;
         try {
-            KeyAgreement ka = KeyAgreement.getInstance(KA_ALGORITHM, "BC");
+            KeyAgreement ka = KeyAgreement.getInstance(KA_ALGORITHM);
             ka.init(localPrivateKey);
             ka.doPhase(remotePublicKey, true);
             fullSecret = ka.generateSecret();

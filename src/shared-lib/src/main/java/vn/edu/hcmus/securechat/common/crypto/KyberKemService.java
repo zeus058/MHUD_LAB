@@ -34,7 +34,6 @@ public final class KyberKemService {
     private static final Logger log = LoggerFactory.getLogger(KyberKemService.class);
 
     private static final String ALGORITHM = "ML-KEM";
-    private static final String PROVIDER = "BC";
 
     private KyberKemService() {}
 
@@ -43,7 +42,7 @@ public final class KyberKemService {
      */
     public static KeyPair generateKeyPair() throws CryptoException {
         try {
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ALGORITHM, PROVIDER);
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ALGORITHM);
             // ML-KEM-768 parameter spec
             kpg.initialize(new java.security.spec.NamedParameterSpec(CryptoConstants.KYBER_PARAM));
             KeyPair pair = kpg.generateKeyPair();
@@ -67,7 +66,7 @@ public final class KyberKemService {
     public static PublicKey decodePublicKey(String base64PublicKey) throws CryptoException {
         try {
             byte[] keyBytes = Base64.getDecoder().decode(base64PublicKey);
-            KeyFactory kf = KeyFactory.getInstance(ALGORITHM, PROVIDER);
+            KeyFactory kf = KeyFactory.getInstance(ALGORITHM);
             return kf.generatePublic(new X509EncodedKeySpec(keyBytes));
         } catch (Exception e) {
             throw new CryptoException("Failed to decode ML-KEM public key", e);
@@ -79,7 +78,7 @@ public final class KyberKemService {
      */
     public static PublicKey decodePublicKey(byte[] publicKeyBytes) throws CryptoException {
         try {
-            KeyFactory kf = KeyFactory.getInstance(ALGORITHM, PROVIDER);
+            KeyFactory kf = KeyFactory.getInstance(ALGORITHM);
             return kf.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
         } catch (Exception e) {
             throw new CryptoException("Failed to decode ML-KEM public key bytes", e);
@@ -94,7 +93,7 @@ public final class KyberKemService {
      */
     public static EncapsulationResult encapsulate(PublicKey serverPublicKey) throws CryptoException {
         try {
-            KEM kem = KEM.getInstance(ALGORITHM, PROVIDER);
+            KEM kem = KEM.getInstance(ALGORITHM);
             KEM.Encapsulator encapsulator = kem.newEncapsulator(serverPublicKey);
             KEM.Encapsulated encapsulated = encapsulator.encapsulate();
 
@@ -123,7 +122,7 @@ public final class KyberKemService {
     public static byte[] decapsulate(PrivateKey serverPrivateKey, byte[] ciphertext)
             throws CryptoException {
         try {
-            KEM kem = KEM.getInstance(ALGORITHM, PROVIDER);
+            KEM kem = KEM.getInstance(ALGORITHM);
             KEM.Decapsulator decapsulator = kem.newDecapsulator(serverPrivateKey);
             javax.crypto.SecretKey secretKey = decapsulator.decapsulate(ciphertext);
             byte[] sharedSecret = secretKey.getEncoded();

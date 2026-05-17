@@ -8,7 +8,7 @@ public class SecurityState {
     public enum ConnectionStatus {
         DISCONNECTED("Ngắt kết nối", false),
         CONNECTING("Đang kết nối...", false),
-        CONNECTED_E2EE("CONNECTED (E2EE)", true);
+        CONNECTED_E2EE("Đã kết nối (E2EE)", true);
 
         private final String label;
         private final boolean secure;
@@ -99,17 +99,6 @@ public class SecurityState {
         receivedCount++;
     }
 
-    /** Trạng thái mẫu sau khi đăng nhập thành công (demo UI). */
-    public static SecurityState demoConnected() {
-        SecurityState state = new SecurityState();
-        state.status = ConnectionStatus.CONNECTED_E2EE;
-        state.tgtRemaining = "6h 42m";
-        state.stRemaining = "6h 42m";
-        state.encryption = "AES-256-GCM + ECDHE + Kyber-768";
-        state.certificate = "VALID (hết hạn 2027-01-01)";
-        return state;
-    }
-
     /**
      * Khởi tạo SecurityState với thông tin chứng chỉ thực tế từ PkiManager.
      */
@@ -138,12 +127,12 @@ public class SecurityState {
                         break;
                     }
                 }
-                state.certificate = (valid ? "VALID" : "EXPIRED") + " " + cn + " (hết hạn " + expiry + ")";
+                state.certificate = (valid ? "Hợp lệ" : "Hết hạn") + " · " + cn + " · đến " + expiry;
             } catch (Exception e) {
-                state.certificate = "VALID (không đọc được thông tin)";
+                state.certificate = "Hợp lệ (không đọc được chi tiết)";
             }
         } else {
-            state.certificate = "VALID (không có chứng chỉ)";
+            state.certificate = "Không có chứng chỉ";
         }
         return state;
     }

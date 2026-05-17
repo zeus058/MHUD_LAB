@@ -3,6 +3,7 @@ package vn.edu.hcmus.securechat.client;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Dimension;
+import java.util.Arrays;
 
 import javax.swing.JFrame;
 import javax.swing.JOptionPane;
@@ -26,6 +27,7 @@ import vn.edu.hcmus.securechat.client.network.NtpTimeClient;
 import vn.edu.hcmus.securechat.client.kerberos.KerberosClient;
 import vn.edu.hcmus.securechat.client.crypto.E2eeCryptoService;
 import vn.edu.hcmus.securechat.client.db.LocalDatabase;
+import vn.edu.hcmus.securechat.common.config.ServerConfig;
 
 /**
  * Client Application — Ứng dụng Desktop chat bảo mật E2EE.
@@ -69,7 +71,7 @@ public class ClientApp extends JFrame {
     private void buildAuthScreens() {
         loginPanel = new LoginPanel(new LoginPanel.AuthListener() {
             @Override
-            public void onLoginSuccess(String username, String password) {
+            public void onLoginSuccess(String username, char[] password) {
                 openChatSession(username, password);
             }
 
@@ -80,7 +82,7 @@ public class ClientApp extends JFrame {
 
             @Override
             public void onAuthError(String message) {
-                showError(message);
+                loginPanel.showAuthError(message);
             }
         });
 
@@ -111,64 +113,74 @@ public class ClientApp extends JFrame {
         authContainer.add(registerPanel, CARD_REGISTER);
     }
 
-    private void openChatSession(String username, String password) {
+    private void openChatSession(String username, char[] password) {
+        loginPanel.setConnecting(true);
         connectInBackground(username, password);
     }
 
     /**
      * Kết nối Kerberos + E2EE handshake trước khi vào màn chat.
      */
-    private void connectInBackground(String username, String password) {
+    private void connectInBackground(String username, char[] password) {
         SecurityState connecting = new SecurityState();
         connecting.setStatus(ConnectionStatus.CONNECTING);
 
-        new SwingWorker<E2eeCryptoService, Void>() {
+        new SwingWorker<Object[], Void>() {
             @Override
-            protected E2eeCryptoService doInBackground() throws Exception {
-                log.info("Establishing secure session for user={}", username);
-                
-                // 1. Đồng bộ thời gian
-                NtpTimeClient.syncTime();
-                
-                // 2. Lấy vé Kerberos
-                KerberosClient kerberosClient = new KerberosClient();
-                kerberosClient.requestTgt(username, password.toCharArray());
-                kerberosClient.requestSt(username, password.toCharArray(), "CHAT_SERVICE");
-                
-                // 3. Handshake E2EE thực sự với Chat Server (dùng ST)
-                E2eeCryptoService e2eeService = new E2eeCryptoService();
-                e2eeService.performHandshake(username, password);
-                
-                // 4. Mở khóa CSDL nội bộ bằng PBKDF2 derived key
-                LocalDatabase localDb = new LocalDatabase();
-                localDb.unlockDatabase(password);
-                
-                return e2eeService;
+            protected Object[] doInBackground() throws Exception {
+                try {
+                    log.info("Establishing secure session for user={}", username);
+
+                    // 1. Đồng bộ thời gian
+                    NtpTimeClient.syncTime();
+
+                    // 2. Lấy vé Kerberos
+                    KerberosClient kerberosClient = new KerberosClient();
+                    kerberosClient.requestTgt(username, password);
+                    kerberosClient.requestSt(username, password, ServerConfig.CHAT_HOST);
+
+                    // 3. Handshake E2EE thực sự với Chat Server (dùng ST)
+                    E2eeCryptoService e2eeService = new E2eeCryptoService();
+                    e2eeService.performHandshake(username, password);
+
+                    // 4. Mở khóa CSDL nội bộ bằng PBKDF2 derived key
+                    LocalDatabase localDb = new LocalDatabase(username);
+                    localDb.unlockDatabase(password);
+                    if (!localDb.isUnlocked()) {
+                        throw new vn.edu.hcmus.securechat.common.exception.KeyDerivationException(
+                                "Không mở khóa được lịch sử chat cục bộ");
+                    }
+
+                    return new Object[]{e2eeService, localDb};
+                } finally {
+                    Arrays.fill(password, '\0');
+                }
             }
 
             @Override
             protected void done() {
+                loginPanel.setConnecting(false);
                 try {
-                    E2eeCryptoService e2ee = get();
-                    if (e2ee != null) {
-                        showChat(username, e2ee);
+                    Object[] result = get();
+                    if (result != null && result[0] != null) {
+                        showChat(username, (E2eeCryptoService) result[0], (vn.edu.hcmus.securechat.client.db.LocalDatabase) result[1]);
                     } else {
-                        showError("Kết nối thất bại. Vui lòng thử lại.");
+                        loginPanel.showAuthError("Kết nối thất bại. Kiểm tra máy chủ và thử lại.");
                     }
                 } catch (Exception e) {
                     log.error("Connection failed", e);
                     String message = e.getMessage() != null ? e.getMessage() : "Kết nối thất bại. Vui lòng thử lại.";
-                    showError(message);
+                    loginPanel.showAuthError(message);
                 }
             }
         }.execute();
     }
 
-    private void showChat(String username, E2eeCryptoService e2ee) {
+    private void showChat(String username, E2eeCryptoService e2ee, vn.edu.hcmus.securechat.client.db.LocalDatabase localDb) {
         if (chatPanel != null) {
             root.remove(chatPanel);
         }
-        chatPanel = new ChatPanel(username, e2ee, () -> {
+        chatPanel = new ChatPanel(username, e2ee, localDb, () -> {
             e2ee.disconnect();
             root.remove(chatPanel);
             chatPanel = null;
@@ -195,7 +207,7 @@ public class ClientApp extends JFrame {
     }
 
     private void showError(String message) {
-        JOptionPane.showMessageDialog(this, message, "SecureChat", JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(this, message, "SecureChat — Lỗi", JOptionPane.ERROR_MESSAGE);
     }
 
     public static void main(String[] args) {

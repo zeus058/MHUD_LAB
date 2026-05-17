@@ -1,8 +1,11 @@
 package vn.edu.hcmus.securechat.client.crypto;
 
 import java.io.ByteArrayInputStream;
-import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -22,7 +25,9 @@ import java.util.ArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.protocol.dto.CertificateSigningRequest;
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 
 /**
  * Quản lý sinh khóa RSA, tạo CSR và lưu trữ KeyStore cục bộ.
@@ -57,7 +62,7 @@ public class PkiManager {
         String pubKeyBase64 = Base64.getEncoder().encodeToString(currentKeyPair.getPublic().getEncoded());
 
         // 2. Nonce 16 bytes random (Base64)
-        byte[] nonceBytes = new byte[16];
+        byte[] nonceBytes = new byte[CryptoConstants.NONCE_SIZE_BYTES];
         new SecureRandom().nextBytes(nonceBytes);
         String nonceBase64 = Base64.getEncoder().encodeToString(nonceBytes);
 
@@ -103,32 +108,26 @@ public class PkiManager {
         // Set KeyEntry
         keyStore.setKeyEntry(username, currentKeyPair.getPrivate(), password, chain);
 
-        // Đảm bảo thư mục tồn tại
-        File dir = new File("data/client");
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-
-        // Lưu ra file
-        File ksFile = new File(dir, "keystore_" + username + ".p12");
-        try (FileOutputStream fos = new FileOutputStream(ksFile)) {
+        ClientStoragePaths.ensureUserDir(username);
+        Path ksPath = ClientStoragePaths.keystoreFile(username);
+        try (FileOutputStream fos = new FileOutputStream(ksPath.toFile())) {
             keyStore.store(fos, password);
         }
 
-        log.info("KeyStore saved successfully at: {}", ksFile.getAbsolutePath());
+        log.info("KeyStore saved successfully at: {}", ksPath.toAbsolutePath());
     }
 
     /**
      * Tải KeyStore từ file PKCS12 bằng password của người dùng.
      */
     public static void loadKeyStore(String username, char[] password) throws Exception {
-        File ksFile = new File("data/client", "keystore_" + username + ".p12");
-        if (!ksFile.exists()) {
+        Path ksPath = resolveKeystorePath(username);
+        if (ksPath == null) {
             throw new Exception("KeyStore file not found for user: " + username);
         }
 
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
-        try (java.io.FileInputStream fis = new java.io.FileInputStream(ksFile)) {
+        try (FileInputStream fis = new FileInputStream(ksPath.toFile())) {
             keyStore.load(fis, password);
         }
 
@@ -153,5 +152,20 @@ public class PkiManager {
 
     public static X509Certificate getCertificate() {
         return currentCertificate;
+    }
+
+    private static Path resolveKeystorePath(String username) throws Exception {
+        Path current = ClientStoragePaths.keystoreFile(username);
+        if (Files.isRegularFile(current)) {
+            return current;
+        }
+        Path legacy = Path.of("data/client", "keystore_" + username + ".p12");
+        if (Files.isRegularFile(legacy)) {
+            ClientStoragePaths.ensureUserDir(username);
+            Files.copy(legacy, current, StandardCopyOption.REPLACE_EXISTING);
+            log.info("Di chuyển keystore cũ {} → {}", legacy, current);
+            return current;
+        }
+        return null;
     }
 }

@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.client.crypto.PkiManager;
+import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.client.network.SocketClient;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
@@ -69,8 +70,9 @@ public class RegisterPanel extends JPanel {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.insets = new Insets(0, 0, 4, 0);
 
-        JLabel badge = UiStyles.mutedLabel("PKI REGISTRATION");
-        badge.setForeground(UIConstants.SECURE_TEAL);
+        JLabel badge = UiStyles.statusBadge("Đăng ký PKI",
+                UIConstants.SECURE_TEAL, UIConstants.BORDER_SUBTLE);
+        c.insets = new Insets(0, 0, 12, 0);
         card.add(badge, c);
 
         c.gridy++;
@@ -148,9 +150,9 @@ public class RegisterPanel extends JPanel {
                 Arrays.fill(password, '\0');
                 return;
             }
-            // Kiểm tra nếu user đã đăng ký rồi
-            java.io.File ksFile = new java.io.File("data/client", "keystore_" + username + ".p12");
-            if (ksFile.exists()) {
+            if (ClientStoragePaths.keystoreExists(username)
+                    || java.nio.file.Files.isRegularFile(
+                            java.nio.file.Path.of("data/client", "keystore_" + username + ".p12"))) {
                 statusLabel.setForeground(UIConstants.SECURE_TEAL);
                 statusLabel.setText("“" + username + "” đã đăng ký chứng chỉ rồi. Vui lòng đăng nhập!");
                 Arrays.fill(password, '\0');

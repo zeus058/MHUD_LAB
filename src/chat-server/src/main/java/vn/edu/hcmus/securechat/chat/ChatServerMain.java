@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,6 +67,10 @@ public class ChatServerMain {
 
     private volatile boolean running = false;
     
+    // Offline message queue
+    private record OfflineMessage(String senderId, String recipientId, byte[] plaintext) {}
+    private final Map<String, java.util.List<OfflineMessage>> offlineMessages = new ConcurrentHashMap<>();
+
     private ChatKeyManager keyManager;
     private OcspStaplingManager ocspManager;
     private KeyPair serverKyberPair;
@@ -87,6 +92,9 @@ public class ChatServerMain {
         log.info("========================================");
 
         try {
+            // 0. Register BouncyCastle
+            java.security.Security.addProvider(new BouncyCastleProvider());
+
             // 1. Initialize Key Manager
             keyManager = new ChatKeyManager();
             
@@ -211,6 +219,22 @@ public class ChatServerMain {
             auditLog.info("SESSION_ESTABLISHED clientId={} ip={} expiresAt={}",
                     clientId, clientAddr, serviceTicket.getExpiresAt());
             log.info("Client {} authenticated from {}", clientId, clientAddr);
+
+            broadcastUserList();
+
+            // Gửi tin nhắn offline nếu có
+            java.util.List<OfflineMessage> pending = offlineMessages.remove(clientId);
+            if (pending != null) {
+                for (OfflineMessage offMsg : pending) {
+                    try {
+                        byte[] reEncrypted = AesGcmCipher.encrypt(masterSessionKey, offMsg.plaintext);
+                        EncryptedChatEnvelope env = new EncryptedChatEnvelope(clientId, Base64.getEncoder().encodeToString(reEncrypted));
+                        writeFrame(socket, PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(env));
+                    } catch (Exception ex) {
+                        log.warn("Failed to send offline message", ex);
+                    }
+                }
+            }
         } catch (ReplayAttackException e) {
             auditLog.warn("SESSION_REJECTED clientId={} ip={} reason=REPLAY", clientId, clientAddr);
             sendError(socket, ErrorResponse.ERR_REPLAY_DETECTED, "Authentication rejected");
@@ -245,21 +269,24 @@ public class ChatServerMain {
                 plaintext = AesGcmCipher.decrypt(sender.sessionKey(), cipherPayload);
                 JsonNode message = JsonSerializer.getMapper().readTree(plaintext);
                 validateSender(message, sender.clientId());
+
+                ClientSession recipient = activeSessions.get(envelope.getRecipientId());
+                if (recipient == null || recipient.socket().isClosed()) {
+                    OfflineMessage offMsg = new OfflineMessage(sender.clientId(), envelope.getRecipientId(), Arrays.copyOf(plaintext, plaintext.length));
+                    offlineMessages.computeIfAbsent(envelope.getRecipientId(), k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(offMsg);
+                    log.info("Stored offline message from {} to {}", sender.clientId(), envelope.getRecipientId());
+                } else {
+                    byte[] reEncrypted = AesGcmCipher.encrypt(recipient.sessionKey(), plaintext);
+                    envelope.setPayload(Base64.getEncoder().encodeToString(reEncrypted));
+                    writeFrame(recipient.socket(), PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(envelope));
+                    log.info("Routed encrypted message from {} to {}", sender.clientId(), envelope.getRecipientId());
+                }
+
+                auditLog.info("MESSAGE_ROUTED from={} to={} ip={}",
+                        sender.clientId(), envelope.getRecipientId(), clientAddr);
             } finally {
                 zero(plaintext);
             }
-
-            ClientSession recipient = activeSessions.get(envelope.getRecipientId());
-            if (recipient == null || recipient.socket().isClosed()) {
-                sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Recipient is not connected");
-                return;
-            }
-
-            writeFrame(recipient.socket(), PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(envelope));
-
-            auditLog.info("MESSAGE_ROUTED from={} to={} ip={}",
-                    sender.clientId(), envelope.getRecipientId(), clientAddr);
-            log.info("Routed encrypted message from {} to {}", sender.clientId(), envelope.getRecipientId());
         } catch (MacVerificationException e) {
             auditLog.error("MAC_FAIL phase=CHAT_MESSAGE clientId={} ip={}", sender.clientId(), clientAddr);
             closeQuietly(socket);
@@ -437,6 +464,21 @@ public class ChatServerMain {
             long duration = Instant.now().getEpochSecond() - removed.establishedAt();
             auditLog.info("SESSION_ENDED sessionId={} clientId={} duration_seconds={}",
                     removed.sessionId(), clientId, duration);
+        }
+        broadcastUserList();
+    }
+
+    private void broadcastUserList() {
+        java.util.List<String> users = new java.util.ArrayList<>(activeSessions.keySet());
+        try {
+            byte[] payload = JsonSerializer.toBytes(users);
+            for (ClientSession session : activeSessions.values()) {
+                if (!session.socket().isClosed()) {
+                    writeFrame(session.socket(), PacketFrame.TYPE_USER_LIST, payload);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to broadcast user list", e);
         }
     }
 

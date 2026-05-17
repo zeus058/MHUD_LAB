@@ -89,7 +89,13 @@ public class CaServerMain {
             );
 
             // Khởi tạo Admin HTTP API
-            startAdminApi();
+            try {
+                startAdminApi();
+            } catch (java.net.BindException e) {
+                log.warn("Admin API port 8080 is already in use. Admin HTTP server will not be available, but CA Server will continue.");
+            } catch (Exception e) {
+                log.warn("Failed to start Admin API: {}", e.getMessage());
+            }
 
             try (ServerSocket serverSocket = new ServerSocket(port)) {
                 log.info("CA Server is READY — listening on port {}", port);

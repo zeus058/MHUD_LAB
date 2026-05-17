@@ -21,7 +21,7 @@ public final class CryptoConstants {
     public static final int ST_LIFETIME_SECONDS     = 28_800; // 8 giờ
 
     // Kyber
-    public static final String KYBER_PARAM = "ml_kem_768"; // NIST FIPS 203
+    public static final String KYBER_PARAM = "ML-KEM-768"; // NIST FIPS 203
 
     private CryptoConstants() {} // không khởi tạo
 }

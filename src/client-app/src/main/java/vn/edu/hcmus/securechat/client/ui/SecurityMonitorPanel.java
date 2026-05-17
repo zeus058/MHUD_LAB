@@ -2,10 +2,11 @@ package vn.edu.hcmus.securechat.client.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Insets;
+import java.awt.Component;
+import java.awt.Dimension;
 
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.border.EmptyBorder;
@@ -14,9 +15,11 @@ import vn.edu.hcmus.securechat.client.model.SecurityState;
 import vn.edu.hcmus.securechat.client.model.SecurityState.ConnectionStatus;
 
 /**
- * Panel hiển thị trạng thái bảo mật real-time — theo Contrains.md mục 8.2.
+ * Panel hiển thị trạng thái bảo mật real-time (Contrains.md §8.2).
  */
 public class SecurityMonitorPanel extends JPanel {
+
+    private static final int VALUE_WRAP_PX = 260;
 
     private final JLabel statusValue;
     private final JLabel tgtValue;
@@ -30,70 +33,145 @@ public class SecurityMonitorPanel extends JPanel {
         setOpaque(false);
         setLayout(new BorderLayout());
         setBackground(UIConstants.DEEP_CARBON);
+        setPreferredSize(new Dimension(320, 0));
+        setMinimumSize(new Dimension(300, 0));
 
         UiStyles.RoundedPanel card = UiStyles.cardPanel();
         card.setLayout(new BorderLayout(0, 12));
 
         JPanel titleRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0));
         titleRow.setOpaque(false);
-        statusDot = new JPanel();
-        statusDot.setOpaque(true);
+        statusDot = new JPanel() {
+            @Override
+            protected void paintComponent(java.awt.Graphics g) {
+                java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getBackground());
+                g2.fillOval(0, 0, getWidth(), getHeight());
+                g2.dispose();
+            }
+        };
+        statusDot.setOpaque(false);
         statusDot.setBackground(UIConstants.SIGNAL_RED);
-        statusDot.setPreferredSize(new java.awt.Dimension(10, 10));
+        statusDot.setPreferredSize(new Dimension(12, 12));
         titleRow.add(statusDot);
-        titleRow.add(UiStyles.headingLabel("Security Monitor"));
+        titleRow.add(UiStyles.headingLabel("Giám sát bảo mật"));
         card.add(titleRow, BorderLayout.NORTH);
 
-        JPanel rows = new JPanel(new GridBagLayout());
+        JPanel rows = new JPanel();
         rows.setOpaque(false);
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.insets = new Insets(6, 0, 6, 0);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1;
+        rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
 
-        statusValue = addRow(rows, gbc, "🔒 Trạng thái", "DISCONNECTED");
-        tgtValue = addRow(rows, gbc, "🎟  TGT còn lại", "—");
-        stValue = addRow(rows, gbc, "🎟  ST còn lại", "—");
-        encryptionValue = addRow(rows, gbc, "🔐  Mã hóa", "—");
-        certificateValue = addRow(rows, gbc, "🪪  Chứng chỉ", "—");
-        messagesValue = addRow(rows, gbc, "💬  Tin nhắn", "Đã gửi 0 · Đã nhận 0");
+        statusValue = createValueLabel();
+        tgtValue = createValueLabel();
+        stValue = createValueLabel();
+        encryptionValue = createValueLabel();
+        certificateValue = createValueLabel();
+        messagesValue = createValueLabel();
+
+        rows.add(metricBlock("Trạng thái kết nối", statusValue));
+        rows.add(gap());
+        rows.add(metricBlock("Vé TGT (đăng nhập Kerberos)", tgtValue));
+        rows.add(gap());
+        rows.add(metricBlock("Vé ST (dịch vụ chat)", stValue));
+        rows.add(gap());
+        rows.add(metricBlock("Lớp mã hóa tin nhắn", encryptionValue));
+        rows.add(gap());
+        rows.add(metricBlock("Chứng chỉ X.509", certificateValue));
+        rows.add(gap());
+        rows.add(metricBlock("Thống kê tin nhắn", messagesValue));
 
         card.add(rows, BorderLayout.CENTER);
         add(card, BorderLayout.NORTH);
-        add(new JPanel(), BorderLayout.CENTER);
-        setBorder(new EmptyBorder(0, UIConstants.PADDING, UIConstants.PADDING, UIConstants.PADDING));
+        setBorder(new EmptyBorder(12, UIConstants.PADDING, UIConstants.PADDING, UIConstants.PADDING));
     }
 
-    private JLabel addRow(JPanel parent, GridBagConstraints gbc, String label, String initial) {
-        gbc.gridy++;
-        JLabel key = UiStyles.mutedLabel(label);
-        parent.add(key, gbc);
+    private static JPanel metricBlock(String title, JLabel value) {
+        JPanel block = new JPanel();
+        block.setOpaque(false);
+        block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
+        block.setAlignmentX(Component.LEFT_ALIGNMENT);
+        block.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
 
-        gbc.gridy++;
-        JLabel value = UiStyles.bodyLabel(initial);
-        value.setForeground(UIConstants.TEXT_WHITE);
-        parent.add(value, gbc);
-        return value;
+        JLabel key = UiStyles.mutedLabel(title);
+        key.setAlignmentX(Component.LEFT_ALIGNMENT);
+        value.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        block.add(key);
+        block.add(Box.createVerticalStrut(4));
+        block.add(value);
+        return block;
+    }
+
+    private static Component gap() {
+        return Box.createVerticalStrut(10);
+    }
+
+    private static JLabel createValueLabel() {
+        JLabel label = UiStyles.bodyLabel("—");
+        label.setForeground(UIConstants.TEXT_WHITE);
+        return label;
     }
 
     public void updateState(SecurityState state) {
         ConnectionStatus status = state.getStatus();
-        statusValue.setText(status.getLabel());
-        statusValue.setForeground(status.isSecure() ? UIConstants.SECURE_TEAL : UIConstants.TEXT_SILVER);
+        setWrappedText(statusValue, status.getLabel(), status.isSecure()
+                ? UIConstants.SECURE_TEAL : UIConstants.TEXT_SILVER);
         statusDot.setBackground(status.isSecure() ? UIConstants.SECURE_TEAL : UIConstants.SIGNAL_RED);
 
-        tgtValue.setText(state.getTgtRemaining());
-        stValue.setText(state.getStRemaining());
-        encryptionValue.setText(state.getEncryption());
-        certificateValue.setText(state.getCertificate());
-        messagesValue.setText("Đã gửi " + state.getSentCount() + " · Đã nhận " + state.getReceivedCount());
+        setWrappedText(tgtValue, "Còn " + state.getTgtRemaining(), UIConstants.TEXT_WHITE);
+        setWrappedText(stValue, "Còn " + state.getStRemaining(), UIConstants.TEXT_WHITE);
 
-        Color certColor = state.getCertificate().startsWith("VALID")
-                ? UIConstants.SECURE_TEAL
-                : UIConstants.SIGNAL_RED;
-        certificateValue.setForeground(certColor);
+        setWrappedText(encryptionValue, formatEncryption(state.getEncryption()), UIConstants.SECURE_TEAL);
+
+        String cert = state.getCertificate();
+        Color certColor = cert.startsWith("Hợp lệ") ? UIConstants.SECURE_TEAL : UIConstants.SIGNAL_RED;
+        setWrappedText(certificateValue, formatCertificate(cert), certColor);
+
+        setWrappedText(messagesValue,
+                "Đã gửi " + state.getSentCount() + " · Đã nhận " + state.getReceivedCount(),
+                UIConstants.TEXT_SILVER);
+    }
+
+    private static String formatEncryption(String encryption) {
+        if (encryption == null || encryption.isBlank() || "—".equals(encryption)) {
+            return "—";
+        }
+        return encryption
+                .replace(" + ", "\n")
+                .replace("AES-256-GCM", "AES-256-GCM (tin nhắn)")
+                .replace("Kyber-768", "Kyber-768 (PQC)");
+    }
+
+    private static String formatCertificate(String cert) {
+        if (cert == null || cert.isBlank()) {
+            return "—";
+        }
+        if (cert.startsWith("Không có")) {
+            return cert;
+        }
+        String[] parts = cert.split(" · ");
+        if (parts.length >= 3) {
+            String status = parts[0];
+            String cn = parts[1];
+            String expiry = parts[2].replace("đến ", "Hết hạn: ");
+            return status + "\n@" + cn + "\n" + expiry;
+        }
+        return cert;
+    }
+
+    private static void setWrappedText(JLabel label, String text, Color color) {
+        String hex = String.format("#%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        String body = escapeHtml(text).replace("\n", "<br/>");
+        label.setText("<html><body style='width:" + VALUE_WRAP_PX + "px;margin:0;"
+                + "font-family:Segoe UI;font-size:14px;color:" + hex + ";'>" + body + "</body></html>");
+    }
+
+    private static String escapeHtml(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 }

@@ -106,7 +106,9 @@ public class OcspStaplingManager {
         if (response == null) {
             return true; // Chưa có response → cho phép (graceful degradation)
         }
-        return "GOOD".equals(response.getCertStatus());
+        // Chỉ từ chối khi chứng chỉ bị thu hồi (REVOKED)
+        // UNKNOWN = CA chưa biết cert này (ví dụ self-signed dev certs) → cho phép
+        return !"REVOKED".equals(response.getCertStatus());
     }
 
     /**

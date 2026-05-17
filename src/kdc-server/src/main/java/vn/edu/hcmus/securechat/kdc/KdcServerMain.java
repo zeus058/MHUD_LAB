@@ -102,6 +102,7 @@ public class KdcServerMain {
         } catch (Exception e) {
             log.error("Failed to initialize KDC services", e);
             auditLog.error("KDC_INIT_FAILED error={}", e.getMessage());
+            stop();
             return;
         }
 

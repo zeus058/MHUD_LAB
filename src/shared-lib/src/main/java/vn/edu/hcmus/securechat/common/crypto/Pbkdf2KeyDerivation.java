@@ -1,5 +1,7 @@
 package vn.edu.hcmus.securechat.common.crypto;
 
+import java.util.Arrays;
+
 import org.bouncycastle.crypto.PBEParametersGenerator;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator;
@@ -16,14 +18,19 @@ public class Pbkdf2KeyDerivation {
     public static byte[] deriveDbKey(char[] password, byte[] salt)
             throws KeyDerivationException {
         // password phải là char[], KHÔNG phải String
+        byte[] passwordBytes = null;
         try {
             PKCS5S2ParametersGenerator gen =
                 new PKCS5S2ParametersGenerator(new SHA256Digest());
-            gen.init(PBEParametersGenerator.PKCS5PasswordToUTF8Bytes(password),
-                     salt, ITERATIONS);
+            passwordBytes = PBEParametersGenerator.PKCS5PasswordToUTF8Bytes(password);
+            gen.init(passwordBytes, salt, ITERATIONS);
             return ((KeyParameter) gen.generateDerivedParameters(KEY_SIZE * 8)).getKey();
         } catch (Exception e) {
             throw new KeyDerivationException("PBKDF2 failed", e);
+        } finally {
+            if (passwordBytes != null) {
+                Arrays.fill(passwordBytes, (byte) 0);
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
 import vn.edu.hcmus.securechat.common.exception.CryptoException;
 
 /**
@@ -24,7 +25,6 @@ import vn.edu.hcmus.securechat.common.exception.CryptoException;
  * - Sai private key → exception
  * - Empty plaintext
  */
-@SuppressWarnings("deprecation")
 class HybridEncryptionTest {
 
     private static KeyPair rsaKeyPair;

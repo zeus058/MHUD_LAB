@@ -24,7 +24,7 @@ import vn.edu.hcmus.securechat.common.exception.CryptoException;
  */
 public final class HybridEncryption {
 
-    private static final String RSA_ALGORITHM = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
+    private static final String RSA_ALGORITHM = "RSA/ECB/PKCS1Padding";
 
     private HybridEncryption() {}
 

@@ -63,8 +63,35 @@ public final class UiStyles {
     public static JLabel mutedLabel(String text) {
         JLabel label = new JLabel(text);
         label.setFont(UIConstants.FONT_SMALL);
-        label.setForeground(UIConstants.TEXT_SILVER);
+        label.setForeground(UIConstants.TEXT_MUTED);
         return label;
+    }
+
+    /** Nhãn mục (sidebar, security monitor). */
+    public static JLabel sectionLabel(String text) {
+        JLabel label = new JLabel(text.toUpperCase());
+        label.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD));
+        label.setForeground(UIConstants.TEXT_MUTED);
+        return label;
+    }
+
+    public static JLabel statusBadge(String text, Color fg, Color bg) {
+        JLabel badge = new JLabel("  " + text + "  ") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(bg);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        badge.setOpaque(false);
+        badge.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD));
+        badge.setForeground(fg);
+        badge.setBorder(new EmptyBorder(4, 8, 4, 8));
+        return badge;
     }
 
     public static JTextField styledTextField(int columns) {
@@ -146,7 +173,7 @@ public final class UiStyles {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 if (filled) {
-                    g2.setColor(getModel().isPressed() ? bg.darker() : (getModel().isRollover() ? bg.brighter() : bg));
+                    g2.setColor(bg);
                     g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 }
                 g2.dispose();
@@ -189,7 +216,7 @@ public final class UiStyles {
 
     public static Border focusBorder(boolean focused) {
         return new RoundedLineBorder(
-                focused ? UIConstants.SECURE_TEAL : UIConstants.DARK_SILVER.darker(),
+                focused ? UIConstants.SECURE_TEAL : UIConstants.DARK_SILVER,
                 focused ? 2 : 1,
                 UIConstants.CORNER_RADIUS_SM);
     }

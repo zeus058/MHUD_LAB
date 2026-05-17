@@ -1,81 +1,131 @@
 package vn.edu.hcmus.securechat.client.kerberos;
 
-import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.Pbkdf2KeyDerivation;
 
 /**
- * Cache lưu trữ vé TGT và ST cục bộ (Ticket Caching).
- * Báo cáo mục 3.6: Khôi phục phiên, lưu xuống đĩa cứng bằng khóa PBKDF2.
+ * Cache vé TGT/ST — định dạng file: [salt 32 bytes][ciphertext AES-GCM] (Contrains.md §3.3).
  */
 public class TicketCache {
     private static final Logger log = LoggerFactory.getLogger(TicketCache.class);
 
-    private static File cacheFile(String ticketName) {
-        return new File("tickets_" + ticketName.replace("/", "_") + ".cache");
+    private TicketCache() {
     }
 
-    public static void saveTicket(String ticketName, byte[] ticketData, String password) {
-        log.info("Đang mã hóa và lưu trữ vé {} xuống đĩa cứng...", ticketName);
+    public static void saveTicket(String username, String ticketName, byte[] ticketData, char[] password) {
+        log.info("Mã hóa và lưu vé {} cho user={}", ticketName, username);
+        byte[] key = null;
         try {
-            // 1. Dẫn xuất khóa từ password
-            byte[] salt = new byte[32];
+            ClientStoragePaths.ensureUserDir(username);
+            byte[] salt = new byte[CryptoConstants.PBKDF2_SALT_SIZE];
             new SecureRandom().nextBytes(salt);
-            byte[] key = Pbkdf2KeyDerivation.deriveDbKey(password.toCharArray(), salt);
-
-            // 2. Mã hóa vé
+            key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
             byte[] encrypted = AesGcmCipher.encrypt(key, ticketData);
 
-            // 3. Lưu file (Mock structure: salt + encrypted)
-            File file = cacheFile(ticketName);
-            Files.write(file.toPath(), salt, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            Files.write(file.toPath(), encrypted, StandardOpenOption.APPEND);
-            
-            log.info("Lưu {} thành công vào {}", ticketName, file.getName());
+            Path file = ClientStoragePaths.ticketCacheFile(username, ticketName);
+            Files.write(file, salt, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.write(file, encrypted, StandardOpenOption.APPEND);
+            log.info("Đã lưu {} → {}", ticketName, file);
         } catch (Exception e) {
             log.error("Lỗi khi lưu ticket", e);
+        } finally {
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+            }
         }
     }
 
-    public static byte[] getTicket(String ticketName, String password) {
-        log.info("Đang đọc vé {} từ đĩa cứng...", ticketName);
+    public static byte[] getTicket(String username, String ticketName, char[] password) {
+        log.info("Đọc vé {} cho user={}", ticketName, username);
+        byte[] key = null;
         try {
-            File file = cacheFile(ticketName);
-            if (!file.exists()) {
+            Path file = ClientStoragePaths.ticketCacheFile(username, ticketName);
+            if (!Files.isRegularFile(file)) {
+                byte[] legacy = tryLoadLegacyTicket(ticketName, password);
+                if (legacy != null) {
+                    saveTicket(username, ticketName, legacy, password);
+                }
+                return legacy;
+            }
+            byte[] fileData = Files.readAllBytes(file);
+            if (fileData.length <= CryptoConstants.PBKDF2_SALT_SIZE) {
                 return null;
             }
-            byte[] fileData = Files.readAllBytes(file.toPath());
-            if (fileData.length <= 32) return null;
 
-            byte[] salt = new byte[32];
-            System.arraycopy(fileData, 0, salt, 0, 32);
+            byte[] salt = Arrays.copyOfRange(fileData, 0, CryptoConstants.PBKDF2_SALT_SIZE);
+            byte[] encrypted = Arrays.copyOfRange(fileData, CryptoConstants.PBKDF2_SALT_SIZE, fileData.length);
 
-            byte[] encrypted = new byte[fileData.length - 32];
-            System.arraycopy(fileData, 32, encrypted, 0, encrypted.length);
-
-            byte[] key = Pbkdf2KeyDerivation.deriveDbKey(password.toCharArray(), salt);
+            key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
             return AesGcmCipher.decrypt(key, encrypted);
         } catch (Exception e) {
             log.error("Lỗi khi đọc ticket", e);
+        } finally {
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+            }
         }
         return null;
     }
 
-    public static void clearCache() {
-        File dir = new File(".");
-        File[] cacheFiles = dir.listFiles((d, name) -> name.startsWith("tickets_") && name.endsWith(".cache"));
-        if (cacheFiles != null) {
-            for (File f : cacheFiles) {
-                f.delete();
+    public static void clearCache(String username) {
+        try {
+            Path userDir = ClientStoragePaths.userDir(username);
+            if (!Files.isDirectory(userDir)) {
+                return;
+            }
+            try (Stream<Path> files = Files.list(userDir)) {
+                files.filter(p -> p.getFileName().toString().startsWith("tickets_")
+                        && p.getFileName().toString().endsWith(".cache"))
+                        .forEach(p -> {
+                            try {
+                                Files.deleteIfExists(p);
+                            } catch (IOException e) {
+                                log.warn("Không xóa được {}", p, e);
+                            }
+                        });
+            }
+            log.info("Đã xóa ticket cache của user={}", username);
+        } catch (IOException e) {
+            log.error("Lỗi xóa ticket cache", e);
+        }
+    }
+
+    private static byte[] tryLoadLegacyTicket(String ticketName, char[] password) {
+        Path legacy = Path.of("tickets_" + ticketName.replace("/", "_") + ".cache");
+        if (!Files.isRegularFile(legacy)) {
+            return null;
+        }
+        byte[] key = null;
+        try {
+            byte[] fileData = Files.readAllBytes(legacy);
+            if (fileData.length <= CryptoConstants.PBKDF2_SALT_SIZE) {
+                return null;
+            }
+            byte[] salt = Arrays.copyOfRange(fileData, 0, CryptoConstants.PBKDF2_SALT_SIZE);
+            byte[] encrypted = Arrays.copyOfRange(fileData, CryptoConstants.PBKDF2_SALT_SIZE, fileData.length);
+            key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
+            log.info("Đọc vé legacy từ {}", legacy);
+            return AesGcmCipher.decrypt(key, encrypted);
+        } catch (Exception e) {
+            log.warn("Không đọc được vé legacy {}", legacy, e);
+            return null;
+        } finally {
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
             }
         }
-        log.info("Đã xóa toàn bộ ticket cache cũ.");
     }
 }

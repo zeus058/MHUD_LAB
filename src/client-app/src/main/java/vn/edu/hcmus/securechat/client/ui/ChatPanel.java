@@ -11,11 +11,12 @@ import java.awt.Insets;
 import java.awt.RenderingHints;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
-import java.util.UUID;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -40,7 +41,10 @@ import org.slf4j.LoggerFactory;
 import vn.edu.hcmus.securechat.client.crypto.E2eeCryptoService;
 import vn.edu.hcmus.securechat.client.model.SecurityState;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage;
+import vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope;
 
 /**
  * Giao diện chat chính — danh sách user, khu vực tin nhắn, Security Monitor.
@@ -55,20 +59,25 @@ public class ChatPanel extends JPanel {
     }
 
     private final ChatListener listener;
+    private final vn.edu.hcmus.securechat.client.db.LocalDatabase localDb;
     private final String username;
     private final E2eeCryptoService e2ee;
     private final SecurityState securityState;
     private final SecurityMonitorPanel securityPanel;
+    private static final String PLACEHOLDER_PEER = "(đang tải danh sách...)";
+
     private JPanel messageContainer;
+    private JScrollPane messageScroll;
     private JTextField messageInput;
     private JLabel peerTitle;
     private JLabel connectionBadge;
-    private String selectedPeer = null;
+    private String selectedPeer;
     private DefaultListModel<String> userListModel;
 
-    public ChatPanel(String username, E2eeCryptoService e2ee, ChatListener listener) {
+    public ChatPanel(String username, E2eeCryptoService e2ee, vn.edu.hcmus.securechat.client.db.LocalDatabase localDb, ChatListener listener) {
         this.username = username;
         this.e2ee = e2ee;
+        this.localDb = localDb;
         this.listener = listener;
         this.securityState = SecurityState.fromRealSession(
                 vn.edu.hcmus.securechat.client.crypto.PkiManager.getCertificate());
@@ -101,22 +110,19 @@ public class ChatPanel extends JPanel {
 
         JPanel brand = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         brand.setOpaque(false);
-        JLabel lock = UiStyles.headingLabel("🔒");
-        brand.add(lock);
         JPanel titles = new JPanel();
         titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
         titles.setOpaque(false);
         JLabel appName = UiStyles.headingLabel("SecureChat E2EE");
-        JLabel userLine = UiStyles.mutedLabel("@" + username);
+        JLabel userLine = UiStyles.mutedLabel("Đăng nhập: @" + username);
         userLine.setForeground(UIConstants.SECURE_TEAL);
         titles.add(appName);
         titles.add(userLine);
         brand.add(titles);
         header.add(brand, BorderLayout.WEST);
 
-        connectionBadge = UiStyles.mutedLabel("● E2EE");
-        connectionBadge.setForeground(UIConstants.SECURE_TEAL);
-        connectionBadge.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD));
+        connectionBadge = UiStyles.statusBadge("E2EE hoạt động",
+                UIConstants.SECURE_TEAL, UIConstants.BORDER_SUBTLE);
         header.add(connectionBadge, BorderLayout.CENTER);
 
         JButton logout = UiStyles.ghostButton("Đăng xuất");
@@ -132,7 +138,7 @@ public class ChatPanel extends JPanel {
         body.add(buildSidebar(), BorderLayout.WEST);
         body.add(buildChatArea(), BorderLayout.CENTER);
         body.add(securityPanel, BorderLayout.EAST);
-        securityPanel.setPreferredSize(new Dimension(280, 0));
+        securityPanel.setPreferredSize(new Dimension(320, 0));
         return body;
     }
 
@@ -140,15 +146,15 @@ public class ChatPanel extends JPanel {
         JPanel sidebar = new JPanel(new BorderLayout());
         sidebar.setOpaque(true);
         sidebar.setBackground(UIConstants.DARK_SILVER);
-        sidebar.setPreferredSize(new Dimension(220, 0));
-        sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, UIConstants.DEEP_CARBON));
+        sidebar.setPreferredSize(new Dimension(240, 0));
+        sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, UIConstants.BORDER_SUBTLE));
 
-        JLabel title = UiStyles.mutedLabel("  TRỰC TUYẼN");
-        title.setBorder(new EmptyBorder(14, 8, 8, 8));
+        JLabel title = UiStyles.sectionLabel("Người dùng trực tuyến");
+        title.setBorder(new EmptyBorder(16, 14, 10, 14));
         sidebar.add(title, BorderLayout.NORTH);
 
         userListModel = new DefaultListModel<>();
-        userListModel.addElement("(chờ kết nối...)");
+        userListModel.addElement(PLACEHOLDER_PEER);
 
         JList<String> userList = new JList<>(userListModel);
         userList.setBackground(UIConstants.DARK_SILVER);
@@ -163,18 +169,18 @@ public class ChatPanel extends JPanel {
         userList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 String sel = userList.getSelectedValue();
-                if (sel != null && !sel.equals(username)) {
+                if (sel != null && !sel.equals(username) && !isPlaceholderPeer(sel)) {
                     selectedPeer = sel;
-                    peerTitle.setText(selectedPeer);
+                    peerTitle.setText("@" + selectedPeer);
+                    loadChatHistory();
                 }
             }
         });
 
-        sidebar.add(new JScrollPane(userList) {{
-            setBorder(BorderFactory.createEmptyBorder());
-            getViewport().setBackground(UIConstants.DARK_SILVER);
-            setBackground(UIConstants.DARK_SILVER);
-        }}, BorderLayout.CENTER);
+        JScrollPane userScroll = UiStyles.styledScrollPane(userList);
+        userScroll.getViewport().setBackground(UIConstants.DARK_SILVER);
+        userScroll.setBackground(UIConstants.DARK_SILVER);
+        sidebar.add(userScroll, BorderLayout.CENTER);
         return sidebar;
     }
 
@@ -186,9 +192,9 @@ public class ChatPanel extends JPanel {
         JPanel topBar = new JPanel(new BorderLayout());
         topBar.setOpaque(false);
         topBar.setBorder(new EmptyBorder(12, UIConstants.PADDING, 8, UIConstants.PADDING));
-        peerTitle = UiStyles.headingLabel(selectedPeer);
+        peerTitle = UiStyles.headingLabel("Chọn người chat");
         topBar.add(peerTitle, BorderLayout.WEST);
-        JLabel encryptedHint = UiStyles.mutedLabel("Tin nhắn được mã hóa AES-256-GCM");
+        JLabel encryptedHint = UiStyles.mutedLabel("AES-256-GCM · ECDHE · Kyber");
         encryptedHint.setForeground(UIConstants.SECURE_TEAL);
         topBar.add(encryptedHint, BorderLayout.EAST);
         chat.add(topBar, BorderLayout.NORTH);
@@ -198,18 +204,57 @@ public class ChatPanel extends JPanel {
         messageContainer.setBackground(UIConstants.DEEP_CARBON);
         messageContainer.setBorder(new EmptyBorder(8, UIConstants.PADDING, 8, UIConstants.PADDING));
 
-        seedDemoMessages();
+        loadChatHistory();
 
-        JScrollPane scroll = UiStyles.styledScrollPane(messageContainer);
-        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        chat.add(scroll, BorderLayout.CENTER);
+        messageScroll = UiStyles.styledScrollPane(messageContainer);
+        messageScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        chat.add(messageScroll, BorderLayout.CENTER);
         chat.add(buildComposer(), BorderLayout.SOUTH);
         return chat;
     }
 
-    private void seedDemoMessages() {
-        // Không còn demo — chờ tin nhắn thực tế từ server
-        addMessageBubble("Kết nối E2EE thành công. Chọ tin nhắn...", false, LocalTime.now().format(TIME_FMT));
+    private void loadChatHistory() {
+        messageContainer.removeAll();
+        if (selectedPeer != null && localDb != null) {
+            java.util.List<ChatMessage> msgs = localDb.loadMessages(username, selectedPeer);
+            for (ChatMessage msg : msgs) {
+                boolean outgoing = msg.getSenderId().equals(username);
+                String time = java.time.Instant.ofEpochSecond(msg.getSentAt())
+                        .atZone(java.time.ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
+                addMessageBubble(msg.getContent(), outgoing, time);
+            }
+        }
+        if (messageContainer.getComponentCount() == 0) {
+            showEmptyState(selectedPeer == null || isPlaceholderPeer(selectedPeer)
+                    ? "Chọn người dùng bên trái để bắt đầu trò chuyện."
+                    : "Chưa có tin nhắn. Gửi tin đầu tiên bên dưới.");
+        }
+        scrollMessagesToEnd();
+    }
+
+    private void showEmptyState(String hint) {
+        JPanel hintRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 24));
+        hintRow.setOpaque(false);
+        hintRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel lbl = UiStyles.mutedLabel(hint);
+        lbl.setForeground(UIConstants.TEXT_MUTED);
+        hintRow.add(lbl);
+        messageContainer.add(hintRow);
+    }
+
+    private static boolean isPlaceholderPeer(String peer) {
+        return peer == null || peer.startsWith("(");
+    }
+
+    private void scrollMessagesToEnd() {
+        messageContainer.revalidate();
+        messageContainer.repaint();
+        if (messageScroll != null) {
+            SwingUtilities.invokeLater(() -> {
+                JScrollPane sp = messageScroll;
+                sp.getVerticalScrollBar().setValue(sp.getVerticalScrollBar().getMaximum());
+            });
+        }
     }
 
     private JPanel buildComposer() {
@@ -219,7 +264,7 @@ public class ChatPanel extends JPanel {
         composer.setBorder(new EmptyBorder(12, UIConstants.PADDING, 12, UIConstants.PADDING));
 
         messageInput = UiStyles.styledTextField(1);
-        messageInput.putClientProperty("JTextField.placeholderText", "Nhập tin nhắn...");
+        messageInput.setToolTipText("Nhập tin nhắn (Enter để gửi)");
         composer.add(messageInput, BorderLayout.CENTER);
 
         JButton send = UiStyles.primaryButton("Gửi");
@@ -232,7 +277,7 @@ public class ChatPanel extends JPanel {
 
     private void sendMessage() {
         String text = messageInput.getText().trim();
-        if (text.isEmpty() || selectedPeer == null) {
+        if (text.isEmpty() || selectedPeer == null || isPlaceholderPeer(selectedPeer)) {
             return;
         }
         messageInput.setEnabled(false);
@@ -247,22 +292,26 @@ public class ChatPanel extends JPanel {
                     Socket sock = e2ee.getChatSocket();
                     if (sock == null || sock.isClosed()) return false;
 
-                    // Tạo JSON tin nhắn
-                    String msgJson = "{\"senderId\":\"" + username + "\","
-                            + "\"text\":\"" + textToSend.replace("\"", "\\\"")
-                            + "\"}"; 
-                    byte[] plain = msgJson.getBytes(StandardCharsets.UTF_8);
+                    ChatMessage message = new ChatMessage(
+                            username,
+                            textToSend,
+                            Instant.now().getEpochSecond());
+                    byte[] plain = JsonSerializer.toBytes(message);
                     byte[] encrypted = AesGcmCipher.encrypt(e2ee.getMasterSessionKey(), plain);
-
-                    // Tạo envelope
-                    String envelopeJson = "{\"recipientId\":\"" + selectedPeer + "\","
-                            + "\"payload\":\"" + Base64.getEncoder().encodeToString(encrypted) + "\"}"; 
-                    PacketFrame.write(sock.getOutputStream(), 
-                            PacketFrame.TYPE_CHAT_MESSAGE,
-                            envelopeJson.getBytes(StandardCharsets.UTF_8));
+                    try {
+                        EncryptedChatEnvelope envelope = new EncryptedChatEnvelope(
+                                selectedPeer,
+                                Base64.getEncoder().encodeToString(encrypted));
+                        PacketFrame.write(sock.getOutputStream(),
+                                PacketFrame.TYPE_CHAT_MESSAGE,
+                                JsonSerializer.toBytes(envelope));
+                    } finally {
+                        Arrays.fill(plain, (byte) 0);
+                        Arrays.fill(encrypted, (byte) 0);
+                    }
                     return true;
                 } catch (Exception ex) {
-                    log.error("Gửii tin nhắn thất bại", ex);
+                    log.error("Gửi tin nhắn thất bại", ex);
                     return false;
                 }
             }
@@ -272,6 +321,7 @@ public class ChatPanel extends JPanel {
                 try {
                     if (Boolean.TRUE.equals(get())) {
                         addMessageBubble(textToSend, true, time);
+                        localDb.saveMessage(username, selectedPeer, username, textToSend, Instant.now().getEpochSecond());
                         securityState.incrementSent();
                         securityPanel.updateState(securityState);
                     }
@@ -319,28 +369,38 @@ public class ChatPanel extends JPanel {
                     }
                     if (selectedPeer == null && !userListModel.isEmpty()) {
                         selectedPeer = userListModel.get(0);
-                        peerTitle.setText(selectedPeer);
+                        peerTitle.setText("@" + selectedPeer);
+                        loadChatHistory();
+                    } else if (userListModel.isEmpty()) {
+                        selectedPeer = null;
+                        peerTitle.setText("Chưa có người dùng");
+                        userListModel.addElement(PLACEHOLDER_PEER);
+                        loadChatHistory();
                     }
                 });
             } else if (frame.getType() == PacketFrame.TYPE_CHAT_MESSAGE) {
                 // Giải mã và hiển thị tin nhắn
-                String envelopeJson = new String(frame.getPayload(), StandardCharsets.UTF_8);
-                com.fasterxml.jackson.databind.JsonNode node = 
-                        vn.edu.hcmus.securechat.common.protocol.JsonSerializer
-                        .getMapper().readTree(envelopeJson);
-                byte[] encrypted = Base64.getDecoder().decode(node.get("payload").asText());
+                EncryptedChatEnvelope envelope = JsonSerializer.fromBytes(
+                        frame.getPayload(), EncryptedChatEnvelope.class);
+                byte[] encrypted = Base64.getDecoder().decode(envelope.getPayload());
                 byte[] plain = AesGcmCipher.decrypt(e2ee.getMasterSessionKey(), encrypted);
-                com.fasterxml.jackson.databind.JsonNode msg =
-                        vn.edu.hcmus.securechat.common.protocol.JsonSerializer
-                        .getMapper().readTree(plain);
-                String sender = msg.get("senderId").asText();
-                String text   = msg.get("text").asText();
-                String time   = LocalTime.now().format(TIME_FMT);
-                SwingUtilities.invokeLater(() -> {
-                    addMessageBubble(sender + ": " + text, false, time);
-                    securityState.incrementReceived();
-                    securityPanel.updateState(securityState);
-                });
+                try {
+                    ChatMessage msg = JsonSerializer.fromBytes(plain, ChatMessage.class);
+                    String sender = msg.getSenderId();
+                    String text = msg.getContent();
+                    String time = java.time.Instant.ofEpochSecond(msg.getSentAt()).atZone(java.time.ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
+                    SwingUtilities.invokeLater(() -> {
+                        if (sender.equals(selectedPeer)) {
+                            addMessageBubble(text, false, time);
+                        }
+                        localDb.saveMessage(username, sender, sender, text, msg.getSentAt());
+                        securityState.incrementReceived();
+                        securityPanel.updateState(securityState);
+                    });
+                } finally {
+                    Arrays.fill(encrypted, (byte) 0);
+                    Arrays.fill(plain, (byte) 0);
+                }
             }
         } catch (Exception ex) {
             log.warn("Lỗi xử lý frame từ server", ex);
@@ -356,8 +416,7 @@ public class ChatPanel extends JPanel {
         row.add(new MessageBubble(text, time, outgoing));
         messageContainer.add(row);
         messageContainer.add(Box.createVerticalStrut(4));
-        messageContainer.revalidate();
-        messageContainer.repaint();
+        scrollMessagesToEnd();
     }
 
     private static final class MessageBubble extends JPanel {
@@ -376,8 +435,14 @@ public class ChatPanel extends JPanel {
             body.setEditable(false);
             body.setBorder(new EmptyBorder(10, 14, 6, 14));
             body.setOpaque(true);
+            body.setSize(new Dimension(maxW, Short.MAX_VALUE));
             Dimension pref = body.getPreferredSize();
-            body.setPreferredSize(new Dimension(Math.min(maxW, pref.width + 20), pref.height));
+            if (pref.width > maxW) {
+                pref = new Dimension(maxW, body.getPreferredSize().height);
+            } else {
+                pref = new Dimension(pref.width + 10, pref.height);
+            }
+            body.setPreferredSize(pref);
 
             JLabel timeLabel = UiStyles.mutedLabel(time);
             timeLabel.setForeground(outgoing ? UIConstants.TEXT_WHITE : UIConstants.TEXT_SILVER);
@@ -407,14 +472,16 @@ public class ChatPanel extends JPanel {
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
                 boolean isSelected, boolean cellHasFocus) {
             JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-            label.setText("  ●  " + value);
-            label.setBorder(new EmptyBorder(4, 8, 4, 8));
+            String name = String.valueOf(value);
+            boolean online = !isPlaceholderPeer(name);
+            label.setText(online ? "  ●  @" + name : "  " + name);
+            label.setBorder(new EmptyBorder(6, 10, 6, 10));
             if (isSelected) {
                 label.setBackground(UIConstants.SECURE_TEAL);
                 label.setForeground(UIConstants.TEXT_WHITE);
             } else {
                 label.setBackground(UIConstants.DARK_SILVER);
-                label.setForeground(UIConstants.TEXT_SILVER);
+                label.setForeground(online ? UIConstants.TEXT_SILVER : UIConstants.TEXT_MUTED);
             }
             label.setFont(UIConstants.FONT_BODY);
             return label;

@@ -1,106 +1,210 @@
 package vn.edu.hcmus.securechat.client.db;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Base64;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.Pbkdf2KeyDerivation;
+import vn.edu.hcmus.securechat.common.exception.KeyDerivationException;
 
 /**
- * Quản lý CSDL nội bộ SQLite.
- * Theo báo cáo 3.4 & 5.3: Nội dung tin nhắn phải được mã hóa tĩnh bằng khóa dẫn xuất PBKDF2.
+ * CSDL SQLite cục bộ — tin nhắn mã hóa tĩnh bằng khóa PBKDF2 (Contrains.md §3.3–3.4).
  */
 public class LocalDatabase {
     private static final Logger log = LoggerFactory.getLogger(LocalDatabase.class);
-    private static final String DB_URL = "jdbc:sqlite:chat_history.db";
 
-    private byte[] dbKey; // Khóa AES dẫn xuất từ password người dùng
+    private final String username;
+    private final String jdbcUrl;
+    private final Path saltDbFile;
+    private byte[] dbKey;
 
-    public LocalDatabase() {
+    public LocalDatabase(String username) {
+        this.username = username;
+        Path sqliteFile = ClientStoragePaths.messagesSqliteFile(username);
+        this.saltDbFile = ClientStoragePaths.chatDbSaltFile(username);
+        this.jdbcUrl = "jdbc:sqlite:" + sqliteFile.toString().replace('\\', '/');
         initDb();
     }
 
     /**
-     * Khởi tạo CSDL, gọi hàm này khi người dùng đăng nhập thành công.
-     * Tạo khóa dẫn xuất PBKDF2 từ password đăng nhập để mã hóa db.
+     * Dẫn xuất khóa PBKDF2 từ password; salt đọc từ bytes 0–31 của {@code chat.db}.
      */
-    public void unlockDatabase(String password) {
-        log.info("Dẫn xuất khóa PBKDF2 từ password để mở khóa CSDL nội bộ...");
+    public void unlockDatabase(char[] password) throws KeyDerivationException {
+        log.info("Dẫn xuất khóa PBKDF2 cho user={}", username);
         try {
-            // Trong thực tế salt này phải được load từ config. Giả lập salt cố định.
-            byte[] salt = "SecureChatDbSalt".getBytes();
-            this.dbKey = Pbkdf2KeyDerivation.deriveDbKey(password.toCharArray(), salt);
-            log.info("Mở khóa CSDL thành công.");
+            ClientStoragePaths.ensureUserDir(username);
+            byte[] salt = loadOrCreateSalt();
+            this.dbKey = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
+            log.info("Mở khóa CSDL thành công: {}", ClientStoragePaths.messagesSqliteFile(username));
+        } catch (KeyDerivationException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Lỗi khi mở khóa DB", e);
+            throw new KeyDerivationException("Không mở khóa được CSDL cục bộ", e);
         }
     }
 
+    public boolean isUnlocked() {
+        return dbKey != null;
+    }
+
     private void initDb() {
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             Statement stmt = conn.createStatement()) {
-            
-            String sql = "CREATE TABLE IF NOT EXISTS messages (" +
-                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                         "sender TEXT NOT NULL," +
-                         "encrypted_content TEXT NOT NULL," + // Nội dung bị mã hóa
-                         "timestamp INTEGER NOT NULL" +
-                         ");";
-            stmt.execute(sql);
-            log.info("Khởi tạo bảng messages trong SQLite thành công.");
-            
+        try {
+            ClientStoragePaths.ensureUserDir(username);
+            migrateLegacyStorageIfNeeded();
+            try (Connection conn = DriverManager.getConnection(jdbcUrl);
+                 Statement stmt = conn.createStatement()) {
+                String sql = "CREATE TABLE IF NOT EXISTS messages ("
+                        + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        + "owner TEXT,"
+                        + "peer TEXT,"
+                        + "sender TEXT NOT NULL,"
+                        + "encrypted_content TEXT NOT NULL,"
+                        + "timestamp INTEGER NOT NULL"
+                        + ");";
+                stmt.execute(sql);
+                try {
+                    stmt.execute("ALTER TABLE messages ADD COLUMN owner TEXT");
+                } catch (Exception ignored) {
+                    // column exists
+                }
+                try {
+                    stmt.execute("ALTER TABLE messages ADD COLUMN peer TEXT");
+                } catch (Exception ignored) {
+                    // column exists
+                }
+                log.info("Khởi tạo SQLite messages cho user={}", username);
+            }
         } catch (Exception e) {
             log.error("Lỗi khi khởi tạo SQLite", e);
         }
     }
 
-    public void saveMessage(String sender, String content) {
+    public void saveMessage(String owner, String peer, String sender, String content, long timestamp) {
         if (dbKey == null) {
-            log.error("CSDL chưa được mở khóa (Missing dbKey)");
+            log.warn("Bỏ qua lưu tin nhắn — CSDL chưa được mở khóa");
             return;
         }
 
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+        byte[] plainText = content.getBytes(StandardCharsets.UTF_8);
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "INSERT INTO messages(sender, encrypted_content, timestamp) VALUES(?, ?, ?)")) {
-            
-            // Mã hóa content bằng AES-GCM
-            byte[] cipherText = AesGcmCipher.encrypt(dbKey, content.getBytes());
+                     "INSERT INTO messages(owner, peer, sender, encrypted_content, timestamp) "
+                             + "VALUES(?, ?, ?, ?, ?)")) {
+            byte[] cipherText = AesGcmCipher.encrypt(dbKey, plainText);
             String encryptedBase64 = Base64.getEncoder().encodeToString(cipherText);
-            
-            pstmt.setString(1, sender);
-            pstmt.setString(2, encryptedBase64);
-            pstmt.setLong(3, System.currentTimeMillis());
+            pstmt.setString(1, owner);
+            pstmt.setString(2, peer);
+            pstmt.setString(3, sender);
+            pstmt.setString(4, encryptedBase64);
+            pstmt.setLong(5, timestamp);
             pstmt.executeUpdate();
-            
-            log.info("Lưu tin nhắn mã hóa thành công vào CSDL.");
         } catch (Exception e) {
             log.error("Lỗi lưu tin nhắn", e);
+        } finally {
+            Arrays.fill(plainText, (byte) 0);
         }
     }
 
-    public void mockReadMessages() {
-        if (dbKey == null) return;
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT sender, encrypted_content FROM messages LIMIT 1")) {
-            
-            while (rs.next()) {
-                String sender = rs.getString("sender");
-                String encryptedBase64 = rs.getString("encrypted_content");
-                byte[] cipherText = Base64.getDecoder().decode(encryptedBase64);
-                byte[] plainText = AesGcmCipher.decrypt(dbKey, cipherText);
-                log.info("Đọc lịch sử: {} -> {}", sender, new String(plainText));
+    public java.util.List<vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage> loadMessages(
+            String owner, String peer) {
+        java.util.List<vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage> list = new java.util.ArrayList<>();
+        if (dbKey == null) {
+            return list;
+        }
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "SELECT sender, encrypted_content, timestamp FROM messages "
+                             + "WHERE owner = ? AND peer = ? ORDER BY timestamp ASC")) {
+            pstmt.setString(1, owner);
+            pstmt.setString(2, peer);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    String sender = rs.getString("sender");
+                    String encryptedBase64 = rs.getString("encrypted_content");
+                    long timestamp = rs.getLong("timestamp");
+                    byte[] cipherText = Base64.getDecoder().decode(encryptedBase64);
+                    byte[] plainText = AesGcmCipher.decrypt(dbKey, cipherText);
+                    try {
+                        String content = new String(plainText, StandardCharsets.UTF_8);
+                        list.add(new vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage(
+                                sender, content, timestamp));
+                    } finally {
+                        Arrays.fill(plainText, (byte) 0);
+                    }
+                }
             }
         } catch (Exception e) {
             log.error("Lỗi đọc tin nhắn", e);
+        }
+        return list;
+    }
+
+    /**
+     * Salt PBKDF2: bytes 0–31 của {@code data/client/<user>/chat.db} (Contrains.md §3.3).
+     */
+    private byte[] loadOrCreateSalt() throws IOException {
+        if (Files.exists(saltDbFile) && Files.size(saltDbFile) >= CryptoConstants.PBKDF2_SALT_SIZE) {
+            byte[] fileBytes = Files.readAllBytes(saltDbFile);
+            if (fileBytes.length >= CryptoConstants.PBKDF2_SALT_SIZE) {
+                return Arrays.copyOf(fileBytes, CryptoConstants.PBKDF2_SALT_SIZE);
+            }
+        }
+
+        byte[] legacy = tryLoadLegacySalt();
+        if (legacy != null) {
+            Files.write(saltDbFile, legacy);
+            return legacy;
+        }
+
+        byte[] salt = new byte[CryptoConstants.PBKDF2_SALT_SIZE];
+        new SecureRandom().nextBytes(salt);
+        Files.write(saltDbFile, salt);
+        return salt;
+    }
+
+    private byte[] tryLoadLegacySalt() {
+        Path legacySalt = Path.of("data", "client", "chat_history.salt");
+        try {
+            if (Files.exists(legacySalt)) {
+                byte[] salt = Files.readAllBytes(legacySalt);
+                if (salt.length == CryptoConstants.PBKDF2_SALT_SIZE) {
+                    log.info("Di chuyển salt cũ sang {}", saltDbFile);
+                    return salt;
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Không đọc được salt cũ", e);
+        }
+        return null;
+    }
+
+    private void migrateLegacyStorageIfNeeded() throws IOException {
+        Path target = ClientStoragePaths.messagesSqliteFile(username);
+        if (Files.exists(target)) {
+            return;
+        }
+        Path legacyInCwd = Path.of("chat_history.db");
+        Path legacyInData = Path.of("data", "client", "chat_history.db");
+        Path source = Files.exists(legacyInCwd) ? legacyInCwd
+                : (Files.exists(legacyInData) ? legacyInData : null);
+        if (source != null) {
+            Files.copy(source, target);
+            log.info("Sao chép CSDL cũ {} → {}", source, target);
         }
     }
 }

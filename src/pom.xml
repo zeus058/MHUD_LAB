@@ -129,7 +129,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.1.2</version>
                 <configuration>
-                    <argLine>-Dnet.bytebuddy.experimental=true</argLine>
+                    <argLine>-Dnet.bytebuddy.experimental=true -XX:+EnableDynamicAgentLoading --sun-misc-unsafe-memory-access=allow -Xshare:off</argLine>
                 </configuration>
             </plugin>
         </plugins>

@@ -1,10 +1,13 @@
 package vn.edu.hcmus.securechat.client.kerberos;
 
-import java.util.UUID;
+import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.Base64;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.client.network.NtpTimeClient;
 import vn.edu.hcmus.securechat.client.network.SocketClient;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
@@ -17,10 +20,9 @@ import vn.edu.hcmus.securechat.common.protocol.dto.StRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.StResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.StResponseInner;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
-import vn.edu.hcmus.securechat.common.crypto.HybridCrypto;
+import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
 import vn.edu.hcmus.securechat.client.crypto.PkiManager;
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
-import java.util.Base64;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -47,8 +49,8 @@ public class KerberosClient {
             // 2. Tạo TgtRequest
             TgtRequest req = new TgtRequest();
             req.setClientId(username);
-            req.setTargetTgs("TGS_SERVER");
-            String nonce = UUID.randomUUID().toString();
+            req.setTargetTgs(ServerConfig.TGS_HOST);
+            String nonce = randomNonceBase64();
             req.setNonce(nonce);
 
             byte[] certDer = PkiManager.getCertificate().getEncoded();
@@ -65,7 +67,7 @@ public class KerberosClient {
 
                 // 4. Giải mã response inner bằng Private Key của client
                 byte[] cipherBytes = Base64.getDecoder().decode(tgtResp.getResponse());
-                byte[] innerBytes = HybridCrypto.decrypt(PkiManager.getPrivateKey(), cipherBytes);
+                byte[] innerBytes = HybridEncryption.decrypt(PkiManager.getPrivateKey(), cipherBytes);
                 TgtResponseInner inner = JsonSerializer.fromBytes(innerBytes, TgtResponseInner.class);
 
                 if (!nonce.equals(inner.getNonce())) {
@@ -74,7 +76,12 @@ public class KerberosClient {
 
                 // 5. Lưu vé (gồm chuỗi TGT mã hoá và K_A_TGS) vào đĩa
                 String cacheData = tgtResp.getTgt() + "|||" + inner.getSessionKey();
-                TicketCache.saveTicket("TGT", cacheData.getBytes(StandardCharsets.UTF_8), new String(password));
+                byte[] cacheBytes = cacheData.getBytes(StandardCharsets.UTF_8);
+                try {
+                    TicketCache.saveTicket(username, "TGT", cacheBytes, password);
+                } finally {
+                    Arrays.fill(cacheBytes, (byte) 0);
+                }
 
                 log.info("Xác thực Kerberos AS thành công! Đã lưu TGT và SessionKey K_A_TGS.");
                 return;
@@ -94,15 +101,15 @@ public class KerberosClient {
         log.info("Bắt đầu xin vé ST cho dịch vụ: {}", targetService);
         try {
             // 1. Lấy TGT và K_A_TGS từ cache
-            byte[] cachedData = TicketCache.getTicket("TGT", new String(password));
+            byte[] cachedData = TicketCache.getTicket(username, "TGT", password);
             if (cachedData == null) {
-                TicketCache.clearCache();
+                TicketCache.clearCache(username);
                 throw new Exception("Không đọc được TGT từ cache. Vui lòng đăng nhập lại.");
             }
             String cacheString = new String(cachedData, StandardCharsets.UTF_8);
             String[] parts = cacheString.split("\\|\\|\\|");
             if (parts.length != 2) {
-                TicketCache.clearCache();
+                TicketCache.clearCache(username);
                 throw new Exception("Dữ liệu TGT cache bị hỏng. Vui lòng đăng nhập lại.");
             }
             String tgtBase64 = parts[0];
@@ -112,7 +119,7 @@ public class KerberosClient {
             // 2. Tạo Authenticator (timestamp tính bằng SECONDS, khớp với
             // ReplayDefenseService)
             long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
-            String authNonce = java.util.UUID.randomUUID().toString();
+            String authNonce = randomNonceBase64();
             AuthenticatorJson auth = new AuthenticatorJson(username, timestamp, authNonce);
             byte[] authBytes = JsonSerializer.toBytes(auth);
             byte[] encryptedAuth = AesGcmCipher.encrypt(kaTgsBytes, authBytes);
@@ -124,7 +131,7 @@ public class KerberosClient {
             PacketFrame frame = new PacketFrame(PacketFrame.TYPE_ST_REQUEST, (byte) 1, (short) 0, reqBytes);
 
             log.info("Gửi ST_REQUEST lên TGS...");
-            PacketFrame response = SocketClient.sendRequest("localhost", 8882, frame);
+            PacketFrame response = SocketClient.sendRequest(ServerConfig.TGS_HOST, ServerConfig.TGS_PORT, frame);
 
             if (response.getType() == PacketFrame.TYPE_ST_RESPONSE) {
                 log.info("Nhận được ST_RESPONSE. Đang giải mã...");
@@ -141,8 +148,12 @@ public class KerberosClient {
 
                 // Lưu ST và K_A_Chat
                 String stCacheData = stResp.getSt() + "|||" + inner.getSessionKey();
-                TicketCache.saveTicket("ST_" + targetService, stCacheData.getBytes(StandardCharsets.UTF_8),
-                        new String(password));
+                byte[] stCacheBytes = stCacheData.getBytes(StandardCharsets.UTF_8);
+                try {
+                    TicketCache.saveTicket(username, "ST_" + targetService, stCacheBytes, password);
+                } finally {
+                    Arrays.fill(stCacheBytes, (byte) 0);
+                }
                 log.info("Xác thực Kerberos TGS thành công! Đã lưu ST và SessionKey K_A_Chat.");
                 return;
             } else {
@@ -152,5 +163,11 @@ public class KerberosClient {
             log.error("Lỗi khi xin ST", e);
             throw new Exception("Đăng nhập thất bại khi xin ST: " + e.getMessage(), e);
         }
+    }
+
+    private static String randomNonceBase64() {
+        byte[] nonce = new byte[CryptoConstants.NONCE_SIZE_BYTES];
+        new SecureRandom().nextBytes(nonce);
+        return Base64.getEncoder().encodeToString(nonce);
     }
 }

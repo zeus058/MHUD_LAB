@@ -15,6 +15,10 @@ public final class UIConstants {
 
     public static final Color TEXT_WHITE = Color.decode("#FFFFFF");
     public static final Color TEXT_SILVER = Color.decode("#E2E8F0");
+    /** Chữ phụ / nhãn mờ — dễ phân tầng với TEXT_SILVER */
+    public static final Color TEXT_MUTED = Color.decode("#94A3B8");
+    /** Viền phân vùng nhẹ trên nền tối */
+    public static final Color BORDER_SUBTLE = Color.decode("#2D3748");
 
     public static final int CORNER_RADIUS = 14;
     public static final int CORNER_RADIUS_SM = 10;

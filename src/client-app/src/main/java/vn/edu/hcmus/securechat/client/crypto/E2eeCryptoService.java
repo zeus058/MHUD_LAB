@@ -5,20 +5,19 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Base64;
-import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
-import vn.edu.hcmus.securechat.common.crypto.HkdfKeyDerivation;
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest;
 
 /**
  * E2EE Crypto Service — kết nối Chat Server thực sự, thực hiện handshake Kerberos ST.
@@ -36,12 +35,16 @@ public class E2eeCryptoService {
      * @param password mật khẩu (để đọc ST từ cache)
      * @return true nếu handshake thành công
      */
-    public void performHandshake(String username, String password) throws Exception {
+    public void performHandshake(String username, char[] password) throws Exception {
         log.info("Kết nối đến Chat Server {}:{}", ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
+        byte[] stCacheData = null;
+        byte[] sessionKey = null;
+        byte[] authBytes = null;
+        byte[] encryptedAuth = null;
         try {
             // 1. Đọc ST từ TicketCache
-            byte[] stCacheData = vn.edu.hcmus.securechat.client.kerberos.TicketCache
-                    .getTicket("ST_CHAT_SERVICE", password);
+            stCacheData = vn.edu.hcmus.securechat.client.kerberos.TicketCache
+                    .getTicket(username, "ST_" + ServerConfig.CHAT_HOST, password);
             if (stCacheData == null) {
                 throw new Exception("Không tìm thấy ST trong cache. Vui lòng đảm bảo bạn đã đăng nhập và không bị timeout.");
             }
@@ -52,34 +55,21 @@ public class E2eeCryptoService {
                 throw new Exception("Định dạng dữ liệu ST cache không hợp lệ.");
             }
             String stBase64 = parts[0];
-            byte[] sessionKey = Base64.getDecoder().decode(parts[1]);
+            sessionKey = Base64.getDecoder().decode(parts[1]);
 
             // 2. Tạo Authenticator mã hóa bằng K_A_Chat
-            String nonce = UUID.randomUUID().toString();
+            String nonce = randomNonceBase64();
             long timestamp = Instant.now().getEpochSecond();
             AuthenticatorJson auth = new AuthenticatorJson(username, timestamp, nonce);
-            byte[] authBytes = JsonSerializer.toBytes(auth);
-            byte[] encryptedAuth = AesGcmCipher.encrypt(sessionKey, authBytes);
+            authBytes = JsonSerializer.toBytes(auth);
+            encryptedAuth = AesGcmCipher.encrypt(sessionKey, authBytes);
             String authenticatorB64 = Base64.getEncoder().encodeToString(encryptedAuth);
 
-            // 3. Tạo shared secrets (random) cho HKDF — trong thực tế dùng ECDHE + Kyber
-            byte[] ssEcdhe = new byte[32];
-            byte[] ssKyber = new byte[32];
-            byte[] sessionNonce = new byte[32];
-            new SecureRandom().nextBytes(ssEcdhe);
-            new SecureRandom().nextBytes(ssKyber);
-            new SecureRandom().nextBytes(sessionNonce);
-
-            // 4. Tính Master Session Key
-            this.masterSessionKey = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, sessionNonce);
-
-            // 5. Gửi CHAT_HANDSHAKE đến Chat Server
-            ChatHandshakePayload payload = new ChatHandshakePayload(
-                    stBase64,
-                    authenticatorB64,
-                    Base64.getEncoder().encodeToString(ssEcdhe),
-                    Base64.getEncoder().encodeToString(ssKyber),
-                    Base64.getEncoder().encodeToString(sessionNonce));
+            // ChatServer hiện hỗ trợ fallback: nếu ECDHE/Kyber chưa được cấp public key
+            // ở bước server-hello, K_A_Chat từ ST được dùng làm session key chung.
+            this.masterSessionKey = Arrays.copyOf(sessionKey, sessionKey.length);
+            ChatHandshakeRequest payload = new ChatHandshakeRequest(
+                    stBase64, authenticatorB64, null, null, null);
 
             chatSocket = new Socket(ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
             chatSocket.setSoTimeout(ServerConfig.READ_TIMEOUT_MS);
@@ -106,21 +96,12 @@ public class E2eeCryptoService {
         } catch (Exception e) {
             log.error("E2EE Handshake thất bại", e);
             throw new Exception("Handshake đến Chat Server thất bại: " + e.getMessage(), e);
+        } finally {
+            if (stCacheData != null) Arrays.fill(stCacheData, (byte) 0);
+            if (sessionKey != null) Arrays.fill(sessionKey, (byte) 0);
+            if (authBytes != null) Arrays.fill(authBytes, (byte) 0);
+            if (encryptedAuth != null) Arrays.fill(encryptedAuth, (byte) 0);
         }
-    }
-
-    /** @deprecated Dùng performHandshake(username, password) */
-    @Deprecated
-    public boolean performHandshake() {
-        log.warn("performHandshake() không tham số được gọi — dùng Mock key");
-        try {
-            byte[] ss1 = new byte[32]; byte[] ss2 = new byte[32]; byte[] nonce = new byte[32];
-            new SecureRandom().nextBytes(ss1);
-            new SecureRandom().nextBytes(ss2);
-            new SecureRandom().nextBytes(nonce);
-            this.masterSessionKey = HkdfKeyDerivation.deriveSessionKey(ss1, ss2, nonce);
-            return true;
-        } catch (Exception e) { return false; }
     }
 
     public byte[] getMasterSessionKey() {
@@ -139,22 +120,9 @@ public class E2eeCryptoService {
         }
     }
 
-    // ─── Inner DTOs ──────────────────────────────────────────────────────────
-
-    private static final class ChatHandshakePayload {
-        @JsonProperty("st")        private final String st;
-        @JsonProperty("authenticator") private final String authenticator;
-        @JsonProperty("ssEcdhe")   private final String ssEcdhe;
-        @JsonProperty("ssKyber")   private final String ssKyber;
-        @JsonProperty("sessionNonce") private final String sessionNonce;
-
-        ChatHandshakePayload(String st, String authenticator,
-                             String ssEcdhe, String ssKyber, String sessionNonce) {
-            this.st = st;
-            this.authenticator = authenticator;
-            this.ssEcdhe = ssEcdhe;
-            this.ssKyber = ssKyber;
-            this.sessionNonce = sessionNonce;
-        }
+    private static String randomNonceBase64() {
+        byte[] nonce = new byte[CryptoConstants.NONCE_SIZE_BYTES];
+        new SecureRandom().nextBytes(nonce);
+        return Base64.getEncoder().encodeToString(nonce);
     }
 }

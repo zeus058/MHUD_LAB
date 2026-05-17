@@ -11,7 +11,6 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
-import javax.swing.SwingWorker;
 import javax.swing.border.EmptyBorder;
 
 import org.slf4j.Logger;
@@ -25,7 +24,7 @@ public class LoginPanel extends JPanel {
     private static final Logger log = LoggerFactory.getLogger(LoginPanel.class);
 
     public interface AuthListener {
-        void onLoginSuccess(String username, String password);
+        void onLoginSuccess(String username, char[] password);
 
         void onNavigateRegister();
 
@@ -62,15 +61,17 @@ public class LoginPanel extends JPanel {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.insets = new Insets(0, 0, 4, 0);
 
-        JLabel badge = UiStyles.mutedLabel("ZERO-TRUST MESSAGING");
-        badge.setForeground(UIConstants.SECURE_TEAL);
+        JLabel badge = UiStyles.statusBadge("E2EE · Kerberos · PKI",
+                UIConstants.SECURE_TEAL, UIConstants.BORDER_SUBTLE);
+        c.insets = new Insets(0, 0, 12, 0);
         card.add(badge, c);
 
         c.gridy++;
+        c.insets = new Insets(0, 0, 4, 0);
         card.add(UiStyles.titleLabel("SecureChat E2EE"), c);
 
         c.gridy++;
-        card.add(UiStyles.bodyLabel("Đăng nhập để tiếp tục phiên bảo mật"), c);
+        card.add(UiStyles.bodyLabel("Đăng nhập bằng chứng chỉ và vé Kerberos"), c);
 
         c.gridy++;
         c.insets = new Insets(20, 0, 6, 0);
@@ -126,50 +127,34 @@ public class LoginPanel extends JPanel {
 
         statusLabel.setText(" ");
         if (username.isEmpty() || password.length == 0) {
+            statusLabel.setForeground(UIConstants.SIGNAL_RED);
             statusLabel.setText("Vui lòng nhập đầy đủ thông tin.");
             Arrays.fill(password, '\0');
             return;
         }
 
-        setFormEnabled(false);
-        statusLabel.setForeground(UIConstants.SECURE_TEAL);
-        statusLabel.setText("Đang xác thực...");
+        listener.onLoginSuccess(username, password.clone());
+        Arrays.fill(password, '\0');
+    }
 
-        new SwingWorker<Boolean, Void>() {
-            @Override
-            protected Boolean doInBackground() {
-                // LoginPanel chỉ lo UI, việc connect sẽ ở ClientApp
-                try {
-                    Thread.sleep(200);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-                return true;
-            }
+    /** ClientApp gọi khi đang thiết lập phiên Kerberos + E2EE. */
+    public void setConnecting(boolean connecting) {
+        setFormEnabled(!connecting);
+        if (connecting) {
+            statusLabel.setForeground(UIConstants.SECURE_TEAL);
+            statusLabel.setText("Đang kết nối máy chủ và thiết lập E2EE...");
+            loginButton.setText("Đang kết nối...");
+        } else {
+            loginButton.setText("Đăng nhập");
+            passwordField.setText("");
+        }
+    }
 
-            @Override
-            protected void done() {
-                try {
-                    if (Boolean.TRUE.equals(get())) {
-                        listener.onLoginSuccess(username, new String(password));
-                    } else {
-                        listener.onAuthError("Đăng nhập thất bại. Vui lòng thử lại.");
-                        statusLabel.setForeground(UIConstants.SIGNAL_RED);
-                        statusLabel.setText("Đăng nhập thất bại. Vui lòng thử lại.");
-                    }
-                } catch (Exception e) {
-                    log.error("Login failed", e);
-                    listener.onAuthError("Đăng nhập thất bại. Vui lòng thử lại.");
-                    statusLabel.setForeground(UIConstants.SIGNAL_RED);
-                    statusLabel.setText("Đăng nhập thất bại. Vui lòng thử lại.");
-                } finally {
-                    Arrays.fill(password, '\0');
-                    passwordField.setText("");
-                    setFormEnabled(true);
-                }
-            }
-        }.execute();
+    public void showAuthError(String message) {
+        statusLabel.setForeground(UIConstants.SIGNAL_RED);
+        statusLabel.setText(message);
+        setFormEnabled(true);
+        loginButton.setText("Đăng nhập");
     }
 
     private void setFormEnabled(boolean enabled) {
