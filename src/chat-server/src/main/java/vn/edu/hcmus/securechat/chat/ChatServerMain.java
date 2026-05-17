@@ -1,11 +1,21 @@
 package vn.edu.hcmus.securechat.chat;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,6 +60,8 @@ public class ChatServerMain {
     private final int port;
     private final ExecutorService threadPool;
     private final ReplayDefenseService replayDefense;
+    private PrivateKey chatPrivateKey;
+    private PublicKey chatPublicKey;
 
     private final Map<String, ClientSession> activeSessions = new ConcurrentHashMap<>();
     private final Map<Socket, String> clientIdsBySocket = new ConcurrentHashMap<>();
@@ -65,6 +77,37 @@ public class ChatServerMain {
             t.setDaemon(true);
             return t;
         });
+        loadChatKeyPair();
+    }
+
+    /**
+     * Load chatKeyPair từ file data/chat_server_key.bin do KDC ghi ra.
+     * Format: [4 bytes privLen][privDer][4 bytes pubLen][pubDer]
+     */
+    private void loadChatKeyPair() {
+        File keyFile = new File("data", "chat_server_key.bin");
+        if (!keyFile.exists()) {
+            log.warn("chat_server_key.bin not found — ST decryption will be unavailable. Start KDC first!");
+            return;
+        }
+        try {
+            byte[] data = Files.readAllBytes(keyFile.toPath());
+            int pos = 0;
+            int privLen = ((data[pos]&0xFF)<<24)|((data[pos+1]&0xFF)<<16)|((data[pos+2]&0xFF)<<8)|(data[pos+3]&0xFF);
+            pos += 4;
+            byte[] privDer = Arrays.copyOfRange(data, pos, pos + privLen);
+            pos += privLen;
+            int pubLen = ((data[pos]&0xFF)<<24)|((data[pos+1]&0xFF)<<16)|((data[pos+2]&0xFF)<<8)|(data[pos+3]&0xFF);
+            pos += 4;
+            byte[] pubDer = Arrays.copyOfRange(data, pos, pos + pubLen);
+
+            KeyFactory kf = KeyFactory.getInstance("RSA");
+            chatPrivateKey = kf.generatePrivate(new PKCS8EncodedKeySpec(privDer));
+            chatPublicKey  = kf.generatePublic(new X509EncodedKeySpec(pubDer));
+            log.info("Chat Server KeyPair loaded from {}", keyFile.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Failed to load chat server key pair", e);
+        }
     }
 
     public void start() {
@@ -104,6 +147,7 @@ public class ChatServerMain {
                 switch (type) {
                     case CHAT_HANDSHAKE -> handleHandshake(frame, socket, clientAddr);
                     case CHAT_MESSAGE -> handleChatMessage(frame, socket, clientAddr);
+                    case USER_LIST -> sendUserList(socket);
                     default -> {
                         log.warn("Unexpected message type {} from {}", type, clientAddr);
                         sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Unexpected message type");
@@ -121,6 +165,7 @@ public class ChatServerMain {
             removeSession(socket);
             closeQuietly(socket);
             socketWriteLocks.remove(socket);
+            broadcastUserList(); // Cập nhật danh sách khi ai đó ngắt kết nối
         }
     }
 
@@ -164,6 +209,9 @@ public class ChatServerMain {
             auditLog.info("SESSION_ESTABLISHED clientId={} ip={} expiresAt={}",
                     clientId, clientAddr, serviceTicket.getExpiresAt());
             log.info("Client {} authenticated from {}", clientId, clientAddr);
+
+            // Push danh sách user online cho tất cả client
+            broadcastUserList();
         } catch (ReplayAttackException e) {
             auditLog.warn("SESSION_REJECTED clientId={} ip={} reason=REPLAY", clientId, clientAddr);
             sendError(socket, ErrorResponse.ERR_REPLAY_DETECTED, "Authentication rejected");
@@ -231,16 +279,26 @@ public class ChatServerMain {
         String st = request.getSt().trim();
         byte[] ticketBytes;
         if (st.startsWith("{")) {
+            // Plain JSON (fallback khi không có mã hóa)
             ticketBytes = st.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         } else {
-            ticketBytes = decodeRequired(st, "st");
+            // Base64 → decrypt bằng chatPrivateKey
+            byte[] encryptedSt = decodeRequired(st, "st");
+            if (chatPrivateKey == null) {
+                throw new InvalidTicketException("Chat Server private key not loaded. Start KDC first!");
+            }
+            try {
+                ticketBytes = vn.edu.hcmus.securechat.common.crypto.HybridCrypto
+                        .decrypt(chatPrivateKey, encryptedSt);
+            } catch (Exception e) {
+                throw new InvalidTicketException("Failed to decrypt service ticket: " + e.getMessage(), e);
+            }
         }
 
         try {
             return JsonSerializer.fromBytes(ticketBytes, StInner.class);
         } catch (ProtocolException e) {
-            throw new InvalidTicketException(
-                    "Encrypted ST is not supported until hybrid decrypt is added to shared-lib", e);
+            throw new InvalidTicketException("Failed to parse service ticket", e);
         }
     }
 
@@ -355,6 +413,24 @@ public class ChatServerMain {
             return Base64.getDecoder().decode(base64);
         } catch (IllegalArgumentException e) {
             throw new ProtocolException("Invalid base64 field: " + fieldName, e);
+        }
+    }
+
+    /** Gửi danh sách user online cho 1 client cụ thể. */
+    private void sendUserList(Socket socket) {
+        try {
+            List<String> users = new ArrayList<>(activeSessions.keySet());
+            String json = JsonSerializer.getMapper().writeValueAsString(users);
+            writeFrame(socket, PacketFrame.TYPE_USER_LIST, json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            log.debug("Failed to send user list", e);
+        }
+    }
+
+    /** Broadcast danh sách user online cho tất cả client đang kết nối. */
+    private void broadcastUserList() {
+        for (Map.Entry<Socket, String> entry : clientIdsBySocket.entrySet()) {
+            sendUserList(entry.getKey());
         }
     }
 

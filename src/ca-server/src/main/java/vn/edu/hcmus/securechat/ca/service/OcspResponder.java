@@ -135,7 +135,7 @@ public class OcspResponder {
      * Sử dụng SHA256withRSA.
      */
     private byte[] signOcspResponse(byte[] responseBody) throws Exception {
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA", "SunMSCAPI");
         sig.initSign(ocspPrivateKey);
         sig.update(responseBody);
         return sig.sign();
