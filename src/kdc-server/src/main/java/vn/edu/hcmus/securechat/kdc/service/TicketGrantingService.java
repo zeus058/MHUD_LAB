@@ -116,6 +116,26 @@ public class TicketGrantingService {
                         + " Authenticator=" + authenticator.getClientId());
             }
 
+            // 9.5. Xác thực Proof-of-Possession (PoP) cho ST Request
+            if (request.getSignature() == null || request.getSignature().isBlank()) {
+                throw new ProtocolException("ST request missing Proof-of-Possession signature");
+            }
+            if (tgtInner.getClientCert() == null || tgtInner.getClientCert().isBlank()) {
+                throw new InvalidTicketException("TGT missing client certificate information");
+            }
+            byte[] clientCertDer = Base64.getDecoder().decode(tgtInner.getClientCert());
+            java.security.cert.X509Certificate clientCert = keyManager.decodeCertificate(clientCertDer);
+            
+            String dataToVerifySt = request.getTgt() + "|" + request.getAuthenticator() + "|" + request.getTargetServer();
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initVerify(clientCert.getPublicKey());
+            sig.update(dataToVerifySt.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] sigBytes = Base64.getDecoder().decode(request.getSignature());
+            if (!sig.verify(sigBytes)) {
+                throw new ProtocolException("ST request Proof-of-Possession signature verification failed");
+            }
+            log.info("Proof-of-Possession signature verified successfully in TGS for client: {}", tgtInner.getClientId());
+
             // 10. Sinh session key K_A_Chat (32 bytes, SecureRandom)
             sessionKeyChat = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
             new SecureRandom().nextBytes(sessionKeyChat);
@@ -165,8 +185,21 @@ public class TicketGrantingService {
             try {
                 storage.recordStIssued(tgtInner.getClientId(), request.getTargetServer(), now, expiresAt, clientIp, ControlVector.ST_CV);
                 storage.logAuditEvent("ST_ISSUED", tgtInner.getClientId(), clientIp, "ST issued to " + request.getTargetServer(), true);
+
+                // Tính ticketId từ SHA-256 hash của encrypted ST
+                byte[] stHash = java.security.MessageDigest.getInstance("SHA-256").digest(encryptedSt);
+                String ticketId = Base64.getEncoder().encodeToString(stHash);
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        tgtInner.getClientId(),
+                        clientCert.getSerialNumber().toString(16),
+                        ticketId,
+                        request.getTargetServer(),
+                        "ST_REQUEST",
+                        "SUCCESS",
+                        "ST successfully issued"
+                );
             } catch (Exception e) {
-                log.warn("Failed to record ST issuance in storage", e);
+                log.warn("Failed to record ST issuance in storage or secure log chain", e);
             }
 
             log.info("ST issued for client={}, target={}, expires={}",
@@ -175,6 +208,36 @@ public class TicketGrantingService {
 
             return new StResponse(stB64, responseB64);
 
+        } catch (ProtocolException | CryptoException e) {
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        request != null ? request.getTargetServer() : "N/A",
+                        "ST_REQUEST",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
+            throw e;
+        } catch (Exception e) {
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        request != null ? request.getTargetServer() : "N/A",
+                        "ST_REQUEST",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
+            throw new RuntimeException(e);
         } finally {
             // Xóa session keys khỏi bộ nhớ
             if (sessionKeyTgs != null) Arrays.fill(sessionKeyTgs, (byte) 0);

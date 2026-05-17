@@ -56,6 +56,16 @@ public class KerberosClient {
             byte[] certDer = PkiManager.getCertificate().getEncoded();
             req.setCert(Base64.getEncoder().encodeToString(certDer));
 
+            long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
+            req.setTimestamp(timestamp);
+
+            // Ký Proof-of-Possession (PoP) cho TGT
+            String dataToSign = username + "|" + ServerConfig.TGS_HOST + "|" + nonce + "|" + timestamp;
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initSign(PkiManager.getPrivateKey());
+            sig.update(dataToSign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            req.setSignature(Base64.getEncoder().encodeToString(sig.sign()));
+
             // 3. Gửi qua mạng tới AS Server
             PacketFrame frame = new PacketFrame(PacketFrame.TYPE_TGT_REQUEST, (byte) 1, (short) 0,
                     JsonSerializer.toBytes(req));
@@ -127,6 +137,14 @@ public class KerberosClient {
 
             // 3. Tạo ST_REQUEST
             StRequest req = new StRequest(tgtBase64, authBase64, targetService);
+
+            // Ký Proof-of-Possession (PoP) cho ST
+            String dataToSignSt = tgtBase64 + "|" + authBase64 + "|" + targetService;
+            java.security.Signature sigSt = java.security.Signature.getInstance("SHA256withRSA");
+            sigSt.initSign(PkiManager.getPrivateKey());
+            sigSt.update(dataToSignSt.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            req.setSignature(Base64.getEncoder().encodeToString(sigSt.sign()));
+
             byte[] reqBytes = JsonSerializer.toBytes(req);
             PacketFrame frame = new PacketFrame(PacketFrame.TYPE_ST_REQUEST, (byte) 1, (short) 0, reqBytes);
 

@@ -94,7 +94,7 @@ public class KdcServerMain {
 
             // Khởi tạo services
             OcspClient ocspClient = new OcspClient();
-            authService = new AuthenticationService(keyManager, ocspClient, storage);
+            authService = new AuthenticationService(keyManager, ocspClient, replayDefense, storage);
             tgsService = new TicketGrantingService(keyManager, replayDefense, storage);
 
             log.info("KDC services initialized successfully");

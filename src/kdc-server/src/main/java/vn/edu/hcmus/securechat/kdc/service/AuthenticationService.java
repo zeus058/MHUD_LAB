@@ -22,6 +22,7 @@ import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponseInner;
 import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
+import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
 
 /**
@@ -45,11 +46,13 @@ public class AuthenticationService {
 
     private final KdcKeyManager keyManager;
     private final OcspClient ocspClient;
+    private final ReplayDefenseService replayDefense;
     private final vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage;
 
-    public AuthenticationService(KdcKeyManager keyManager, OcspClient ocspClient, vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage) {
+    public AuthenticationService(KdcKeyManager keyManager, OcspClient ocspClient, ReplayDefenseService replayDefense, vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage) {
         this.keyManager = keyManager;
         this.ocspClient = ocspClient;
+        this.replayDefense = replayDefense;
         this.storage = storage;
     }
 
@@ -93,6 +96,24 @@ public class AuthenticationService {
                         request.getClientId(), clientIp, e.getMessage());
             }
 
+            // 4.5. Xác thực Proof-of-Possession (PoP)
+            if (request.getSignature() == null || request.getSignature().isBlank()) {
+                throw new ProtocolException("TGT request missing Proof-of-Possession signature");
+            }
+            String dataToVerify = request.getClientId() + "|" + request.getTargetTgs() + "|" + request.getNonce() + "|" + request.getTimestamp();
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initVerify(clientCert.getPublicKey());
+            sig.update(dataToVerify.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] sigBytes = Base64.getDecoder().decode(request.getSignature());
+            if (!sig.verify(sigBytes)) {
+                throw new ProtocolException("TGT request Proof-of-Possession signature verification failed");
+            }
+            log.info("Proof-of-Possession signature verified successfully for client: {}", request.getClientId());
+
+            // 4.6. Kiểm tra Replay Attack bằng ReplayDefenseService
+            replayDefense.validate(request.getClientId(), request.getTimestamp(), request.getNonce());
+            log.info("Replay attack check passed for client: {}", request.getClientId());
+
             // 5. Sinh session key K_A_TGS (32 bytes, SecureRandom)
             sessionKey = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
             new SecureRandom().nextBytes(sessionKey);
@@ -109,7 +130,8 @@ public class AuthenticationService {
                     expiresAt,
                     sessionKeyB64,
                     true,   // renewable
-                    TGT_CV
+                    TGT_CV,
+                    request.getCert()
             );
 
             // 7. Serialize TgtInner → JSON bytes
@@ -142,8 +164,21 @@ public class AuthenticationService {
             try {
                 storage.recordTgtIssued(request.getClientId(), request.getTargetTgs(), now, expiresAt, clientIp, TGT_CV);
                 storage.logAuditEvent("TGT_ISSUED", request.getClientId(), clientIp, "TGT issued", true);
+                
+                // Tính ticketId từ SHA-256 hash của encrypted TGT
+                byte[] tgtHash = java.security.MessageDigest.getInstance("SHA-256").digest(encryptedTgt);
+                String ticketId = Base64.getEncoder().encodeToString(tgtHash);
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        request.getClientId(),
+                        certSerial,
+                        ticketId,
+                        request.getTargetTgs(),
+                        "TGT_REQUEST",
+                        "SUCCESS",
+                        "TGT successfully issued"
+                );
             } catch (Exception e) {
-                log.warn("Failed to record TGT issuance in storage", e);
+                log.warn("Failed to record TGT issuance in storage or secure log chain", e);
             }
 
             log.info("TGT issued for client={}, expires={}",
@@ -151,6 +186,36 @@ public class AuthenticationService {
 
             return new TgtResponse(tgtB64, responseB64);
 
+        } catch (ProtocolException | vn.edu.hcmus.securechat.common.exception.PkiException | CryptoException e) {
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        request != null ? request.getClientId() : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        request != null ? request.getTargetTgs() : "N/A",
+                        "TGT_REQUEST",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
+            throw e;
+        } catch (Exception e) {
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        request != null ? request.getClientId() : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        request != null ? request.getTargetTgs() : "N/A",
+                        "TGT_REQUEST",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
+            throw new RuntimeException(e);
         } finally {
             // Xóa session key khỏi bộ nhớ
             if (sessionKey != null) Arrays.fill(sessionKey, (byte) 0);

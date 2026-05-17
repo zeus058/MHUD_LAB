@@ -220,6 +220,22 @@ public class ChatServerMain {
                     clientId, clientAddr, serviceTicket.getExpiresAt());
             log.info("Client {} authenticated from {}", clientId, clientAddr);
 
+            try {
+                byte[] stHash = java.security.MessageDigest.getInstance("SHA-256").digest(Base64.getDecoder().decode(request.getSt()));
+                String ticketId = Base64.getEncoder().encodeToString(stHash);
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        clientId,
+                        "N/A",
+                        ticketId,
+                        ServerConfig.CHAT_HOST,
+                        "CHAT_HANDSHAKE",
+                        "SUCCESS",
+                        "Chat session established"
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write to secure log chain", ex);
+            }
+
             broadcastUserList();
 
             // Gửi tin nhắn offline nếu có
@@ -238,15 +254,67 @@ public class ChatServerMain {
         } catch (ReplayAttackException e) {
             auditLog.warn("SESSION_REJECTED clientId={} ip={} reason=REPLAY", clientId, clientAddr);
             sendError(socket, ErrorResponse.ERR_REPLAY_DETECTED, "Authentication rejected");
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        clientId != null ? clientId : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        ServerConfig.CHAT_HOST,
+                        "CHAT_HANDSHAKE",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
         } catch (ControlVectorException | InvalidTicketException e) {
             auditLog.warn("SESSION_REJECTED clientId={} ip={} reason=INVALID_TICKET", clientId, clientAddr);
             sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Authentication rejected");
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        clientId != null ? clientId : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        ServerConfig.CHAT_HOST,
+                        "CHAT_HANDSHAKE",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
         } catch (MacVerificationException e) {
             auditLog.error("MAC_FAIL phase=HANDSHAKE clientId={} ip={}", clientId, clientAddr);
             closeQuietly(socket);
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        clientId != null ? clientId : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        ServerConfig.CHAT_HOST,
+                        "CHAT_HANDSHAKE",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
         } catch (CryptoException | ProtocolException | IOException | IllegalArgumentException e) {
             log.warn("Handshake failed from {}", clientAddr, e);
             sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid handshake request");
+            try {
+                vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
+                        clientId != null ? clientId : "UNKNOWN",
+                        "N/A",
+                        "N/A",
+                        ServerConfig.CHAT_HOST,
+                        "CHAT_HANDSHAKE",
+                        "FAILED",
+                        e.getMessage()
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to write failure to secure log chain", ex);
+            }
         } finally {
             zeroAll(ticketSessionKey, masterSessionKey);
         }

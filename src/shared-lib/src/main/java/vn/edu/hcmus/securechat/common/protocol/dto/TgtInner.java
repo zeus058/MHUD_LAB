@@ -38,6 +38,9 @@ public class TgtInner {
     @JsonProperty("cv")
     private String cv;
 
+    @JsonProperty("clientCert")
+    private String clientCert; // Base64 of DER-encoded client certificate
+
     public TgtInner() {}
 
     public TgtInner(String clientId, String targetTgs, long issuedAt, long expiresAt,
@@ -49,6 +52,18 @@ public class TgtInner {
         this.sessionKey = sessionKey;
         this.renewable = renewable;
         this.cv = cv;
+    }
+
+    public TgtInner(String clientId, String targetTgs, long issuedAt, long expiresAt,
+                    String sessionKey, boolean renewable, String cv, String clientCert) {
+        this.clientId = clientId;
+        this.targetTgs = targetTgs;
+        this.issuedAt = issuedAt;
+        this.expiresAt = expiresAt;
+        this.sessionKey = sessionKey;
+        this.renewable = renewable;
+        this.cv = cv;
+        this.clientCert = clientCert;
     }
 
     public String getClientId() { return clientId; }
@@ -71,4 +86,7 @@ public class TgtInner {
 
     public String getCv() { return cv; }
     public void setCv(String cv) { this.cv = cv; }
+
+    public String getClientCert() { return clientCert; }
+    public void setClientCert(String clientCert) { this.clientCert = clientCert; }
 }

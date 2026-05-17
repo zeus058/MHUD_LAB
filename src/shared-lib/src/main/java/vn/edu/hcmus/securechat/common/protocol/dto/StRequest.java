@@ -22,12 +22,22 @@ public class StRequest {
     @JsonProperty("targetServer")
     private String targetServer;
 
+    @JsonProperty("signature")
+    private String signature; // Base64 signature of (tgt + "|" + authenticator + "|" + targetServer)
+
     public StRequest() {}
 
     public StRequest(String tgt, String authenticator, String targetServer) {
         this.tgt = tgt;
         this.authenticator = authenticator;
         this.targetServer = targetServer;
+    }
+
+    public StRequest(String tgt, String authenticator, String targetServer, String signature) {
+        this.tgt = tgt;
+        this.authenticator = authenticator;
+        this.targetServer = targetServer;
+        this.signature = signature;
     }
 
     public String getTgt() { return tgt; }
@@ -38,4 +48,7 @@ public class StRequest {
 
     public String getTargetServer() { return targetServer; }
     public void setTargetServer(String targetServer) { this.targetServer = targetServer; }
+
+    public String getSignature() { return signature; }
+    public void setSignature(String signature) { this.signature = signature; }
 }

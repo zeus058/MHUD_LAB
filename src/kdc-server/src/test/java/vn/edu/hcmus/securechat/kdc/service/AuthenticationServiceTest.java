@@ -33,7 +33,7 @@ class AuthenticationServiceTest {
         mockKdcStorage = mock(KdcStorage.class);
         mockKeyManager = mock(KdcKeyManager.class);
         
-        asService = new AuthenticationService(mockKeyManager, mockOcspClient, mockKdcStorage);
+        asService = new AuthenticationService(mockKeyManager, mockOcspClient, new vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService(), mockKdcStorage);
     }
 
     // IT-04: Revoked cert phải fail khi xin vé
