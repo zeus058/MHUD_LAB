@@ -22,6 +22,7 @@ public enum MessageType {
     CHAT_MESSAGE(PacketFrame.TYPE_CHAT_MESSAGE, "Tin nhắn đã mã hóa"),
     OCSP_REQUEST(PacketFrame.TYPE_OCSP_REQUEST, "Client xin OCSP status"),
     OCSP_RESPONSE(PacketFrame.TYPE_OCSP_RESPONSE, "Server trả OCSP response"),
+    USER_LIST(PacketFrame.TYPE_USER_LIST, "Server push danh sách user online"),
     ERROR(PacketFrame.TYPE_ERROR, "Generic error response");
 
     private final byte code;

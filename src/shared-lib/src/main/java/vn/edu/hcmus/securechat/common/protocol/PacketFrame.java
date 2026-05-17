@@ -21,6 +21,7 @@ public class PacketFrame {
     public static final byte TYPE_CHAT_MESSAGE = 0x08;
     public static final byte TYPE_OCSP_REQUEST = 0x09;
     public static final byte TYPE_OCSP_RESPONSE = 0x0A;
+    public static final byte TYPE_USER_LIST = 0x0B;
     public static final byte TYPE_ERROR = (byte) 0xFF;
 
     private byte type;

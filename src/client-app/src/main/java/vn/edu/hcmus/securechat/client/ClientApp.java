@@ -1,7 +1,11 @@
 package vn.edu.hcmus.securechat.client;
 
+import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.Dimension;
+
 import javax.swing.JFrame;
-import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -10,95 +14,196 @@ import javax.swing.UIManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.client.model.SecurityState;
+import vn.edu.hcmus.securechat.client.model.SecurityState.ConnectionStatus;
+import vn.edu.hcmus.securechat.client.ui.ChatPanel;
+import vn.edu.hcmus.securechat.client.ui.LoginPanel;
+import vn.edu.hcmus.securechat.client.ui.RegisterPanel;
+import vn.edu.hcmus.securechat.client.ui.UIConstants;
+import vn.edu.hcmus.securechat.client.ui.UiStyles;
+
+import vn.edu.hcmus.securechat.client.network.NtpTimeClient;
+import vn.edu.hcmus.securechat.client.kerberos.KerberosClient;
+import vn.edu.hcmus.securechat.client.crypto.E2eeCryptoService;
+import vn.edu.hcmus.securechat.client.db.LocalDatabase;
+
 /**
  * Client Application — Ứng dụng Desktop chat bảo mật E2EE.
  * Owner: Trúc Ngọc | Reviewer: Chị Bee
- *
- * Chức năng cần implement:
- * - Đăng nhập / Đăng ký (CSR → CA → nhận Certificate)
- * - Xin TGT từ AS
- * - Xin ST từ TGS
- * - E2EE Handshake với Chat Server (ECDHE + Kyber)
- * - Giao diện chat (gửi/nhận tin nhắn mã hóa AES-GCM)
- * - Security Monitor Panel (hiển thị trạng thái E2EE real-time)
- *
- * QUY TẮC BẮT BUỘC (Contrains.md mục 8.1):
- * - MỌI crypto/network call PHẢI qua SwingWorker — KHÔNG gọi trực tiếp từ EDT
- * - Password dùng char[], không phải String
- * - Arrays.fill() trong finally block cho mọi dữ liệu nhạy cảm
  */
 public class ClientApp extends JFrame {
 
     private static final long serialVersionUID = 1L;
     private static final Logger log = LoggerFactory.getLogger(ClientApp.class);
 
+    private static final String CARD_LOGIN = "login";
+    private static final String CARD_REGISTER = "register";
+    private static final String CARD_CHAT = "chat";
+
+    private final CardLayout authCards = new CardLayout();
+    private final JPanel authContainer = new JPanel(authCards);
+    private final CardLayout rootCards = new CardLayout();
+    private final JPanel root = new JPanel(rootCards);
+
+    private LoginPanel loginPanel;
+    private RegisterPanel registerPanel;
+    private ChatPanel chatPanel;
+
     public ClientApp() {
         setTitle("SecureChat E2EE v2.0");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(900, 600);
+        setMinimumSize(new Dimension(1024, 680));
+        setSize(1100, 720);
         setLocationRelativeTo(null);
+        getContentPane().setBackground(UIConstants.DEEP_CARBON);
 
-        // Placeholder UI — Trúc Ngọc thay bằng UI thực tế
-        JPanel mainPanel = new JPanel();
-        mainPanel.add(new JLabel("🔒 SecureChat E2EE — Chưa kết nối"));
-        setContentPane(mainPanel);
+        buildAuthScreens();
+        root.setBackground(UIConstants.DEEP_CARBON);
+        root.add(authContainer, CARD_LOGIN);
+        setContentPane(root);
 
+        showLogin();
         log.info("ClientApp initialized");
     }
 
-    /**
-     * Pattern mẫu — SwingWorker cho kết nối tới server.
-     * Trúc Ngọc dùng pattern này cho MỌI tác vụ crypto/network.
-     */
-    @SuppressWarnings("unused")
-    private void connectToServerExample() {
-        new SwingWorker<String, Void>() {
+    private void buildAuthScreens() {
+        loginPanel = new LoginPanel(new LoginPanel.AuthListener() {
             @Override
-            protected String doInBackground() throws Exception {
-                // ĐẶT TẤT CẢ crypto/network calls Ở ĐÂY
-                // Ví dụ: TGT request, handshake, etc.
-                log.info("Connecting to server...");
-                return "Connected";
+            public void onLoginSuccess(String username, String password) {
+                openChatSession(username, password);
+            }
+
+            @Override
+            public void onNavigateRegister() {
+                showRegister();
+            }
+
+            @Override
+            public void onAuthError(String message) {
+                showError(message);
+            }
+        });
+
+        registerPanel = new RegisterPanel(new RegisterPanel.RegisterListener() {
+            @Override
+            public void onRegisterSuccess(String username) {
+                JOptionPane.showMessageDialog(ClientApp.this,
+                        "Chứng chỉ đã được cấp cho @" + username + ".\nBạn có thể đăng nhập ngay.",
+                        "Đăng ký thành công",
+                        JOptionPane.INFORMATION_MESSAGE);
+                showLogin();
+            }
+
+            @Override
+            public void onNavigateLogin() {
+                showLogin();
+            }
+
+            @Override
+            public void onAuthError(String message) {
+                showError(message);
+            }
+        });
+
+        authContainer.setLayout(authCards);
+        authContainer.setBackground(UIConstants.DEEP_CARBON);
+        authContainer.add(loginPanel, CARD_LOGIN);
+        authContainer.add(registerPanel, CARD_REGISTER);
+    }
+
+    private void openChatSession(String username, String password) {
+        connectInBackground(username, password);
+    }
+
+    /**
+     * Kết nối Kerberos + E2EE handshake trước khi vào màn chat.
+     */
+    private void connectInBackground(String username, String password) {
+        SecurityState connecting = new SecurityState();
+        connecting.setStatus(ConnectionStatus.CONNECTING);
+
+        new SwingWorker<E2eeCryptoService, Void>() {
+            @Override
+            protected E2eeCryptoService doInBackground() throws Exception {
+                log.info("Establishing secure session for user={}", username);
+                
+                // 1. Đồng bộ thời gian
+                NtpTimeClient.syncTime();
+                
+                // 2. Lấy vé Kerberos
+                KerberosClient kerberosClient = new KerberosClient();
+                kerberosClient.requestTgt(username, password.toCharArray());
+                kerberosClient.requestSt(username, password.toCharArray(), "CHAT_SERVICE");
+                
+                // 3. Handshake E2EE thực sự với Chat Server (dùng ST)
+                E2eeCryptoService e2eeService = new E2eeCryptoService();
+                e2eeService.performHandshake(username, password);
+                
+                // 4. Mở khóa CSDL nội bộ bằng PBKDF2 derived key
+                LocalDatabase localDb = new LocalDatabase();
+                localDb.unlockDatabase(password);
+                
+                return e2eeService;
             }
 
             @Override
             protected void done() {
                 try {
-                    String result = get();
-                    log.info("Connection result: {}", result);
-                    // Chỉ update UI ở đây (EDT thread)
+                    E2eeCryptoService e2ee = get();
+                    if (e2ee != null) {
+                        showChat(username, e2ee);
+                    } else {
+                        showError("Kết nối thất bại. Vui lòng thử lại.");
+                    }
                 } catch (Exception e) {
-                    // Hiển thị generic message — KHÔNG leak exception detail ra UI
                     log.error("Connection failed", e);
+                    String message = e.getMessage() != null ? e.getMessage() : "Kết nối thất bại. Vui lòng thử lại.";
+                    showError(message);
                 }
             }
         }.execute();
     }
 
-    // ====================================================================
-    // TODO: Trúc Ngọc — Implement các phần sau
-    // ====================================================================
-    //
-    // 1. LoginPanel — form đăng nhập (username + password bằng JPasswordField)
-    // 2. RegisterPanel — tạo CSR gửi lên CA, nhận Certificate
-    // 3. ChatPanel — giao diện chat (danh sách user + message area)
-    // 4. SecurityMonitorPanel — panel hiển thị trạng thái bảo mật:
-    //    ┌─────────────────────────────────────────────┐
-    //    │  🔒 Trạng thái:  CONNECTED (E2EE)           │
-    //    │  🎟  TGT còn lại: 6h 42m                    │
-    //    │  🎟  ST còn lại:  6h 42m                    │
-    //    │  🔐  Mã hóa:     AES-256-GCM + ECDHE + Kyber│
-    //    │  🪪  Chứng chỉ:  VALID (hết hạn 2027-01-01) │
-    //    │  💬  Tin nhắn:   Đã gửi 12 · Đã nhận 8     │
-    //    └─────────────────────────────────────────────┘
-    // 5. Tích hợp NTP sync trước khi gửi Authenticator
+    private void showChat(String username, E2eeCryptoService e2ee) {
+        if (chatPanel != null) {
+            root.remove(chatPanel);
+        }
+        chatPanel = new ChatPanel(username, e2ee, () -> {
+            e2ee.disconnect();
+            root.remove(chatPanel);
+            chatPanel = null;
+            rootCards.show(root, CARD_LOGIN);
+            authCards.show(authContainer, CARD_LOGIN);
+            revalidate();
+            repaint();
+        });
+        root.add(chatPanel, CARD_CHAT);
+        rootCards.show(root, CARD_CHAT);
+        revalidate();
+        repaint();
+        log.info("Chat session opened for user={}", username);
+    }
+
+    private void showLogin() {
+        rootCards.show(root, CARD_LOGIN);
+        authCards.show(authContainer, CARD_LOGIN);
+    }
+
+    private void showRegister() {
+        rootCards.show(root, CARD_LOGIN);
+        authCards.show(authContainer, CARD_REGISTER);
+    }
+
+    private void showError(String message) {
+        JOptionPane.showMessageDialog(this, message, "SecureChat", JOptionPane.ERROR_MESSAGE);
+    }
 
     public static void main(String[] args) {
-        // Set Look & Feel
+        UiStyles.applyGlobalTheme();
         try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
         } catch (Exception e) {
-            log.warn("Could not set system look and feel", e);
+            log.warn("Could not set look and feel", e);
         }
 
         SwingUtilities.invokeLater(() -> {

@@ -11,6 +11,8 @@ import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Date;
+import java.security.Security;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 import org.bouncycastle.asn1.x509.BasicConstraints;
 import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
@@ -49,6 +51,12 @@ public class CertificateAuthority {
 
     private PrivateKey caPrivateKey;
     private X509Certificate caCertificate;
+
+    static {
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
 
     public CertificateAuthority() throws KeyStoreException, NoSuchAlgorithmException {
         initializeCaKeys();
@@ -121,9 +129,9 @@ public class CertificateAuthority {
             // Thêm extensions
             addExtensions(certBuilder);
 
-            // Ký chứng chỉ
+            // Ký chứng chỉ (Sử dụng SunMSCAPI để hỗ trợ key của Windows)
             ContentSigner signer = new JcaContentSignerBuilder(SIGNATURE_ALGORITHM)
-                    .setProvider("BC")
+                    .setProvider("SunMSCAPI")
                     .build(caPrivateKey);
 
             // Convert sang X.509Certificate
