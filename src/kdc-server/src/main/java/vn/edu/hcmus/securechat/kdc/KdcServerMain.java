@@ -86,10 +86,10 @@ public class KdcServerMain {
             keyManager = new KdcKeyManager();
 
             // Khởi tạo Database và Storage
-            vn.edu.hcmus.securechat.common.db.DatabaseManager db = 
-                new vn.edu.hcmus.securechat.common.db.DatabaseManager("data/kdc-server.db");
-            vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage = 
-                new vn.edu.hcmus.securechat.kdc.storage.KdcStorage(db);
+            vn.edu.hcmus.securechat.common.db.DatabaseManager db = new vn.edu.hcmus.securechat.common.db.DatabaseManager(
+                    "data/kdc-server.db");
+            vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage = new vn.edu.hcmus.securechat.kdc.storage.KdcStorage(
+                    db);
             storage.initializeTables();
 
             // Khởi tạo services
@@ -151,7 +151,7 @@ public class KdcServerMain {
 
             switch (type) {
                 case TGT_REQUEST -> handleTgtRequest(frame, socket, clientAddr);
-                case ST_REQUEST  -> handleStRequest(frame, socket, clientAddr);
+                case ST_REQUEST -> handleStRequest(frame, socket, clientAddr);
                 default -> {
                     log.warn("[{}] Unexpected message type {} from {}", serverName, type, clientAddr);
                     sendErrorSafe(socket, "INVALID_MESSAGE_TYPE",
@@ -163,7 +163,10 @@ public class KdcServerMain {
         } catch (IOException e) {
             log.error("[{}] IO error from {}", serverName, clientAddr, e);
         } finally {
-            try { socket.close(); } catch (IOException ignored) {}
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
         }
     }
 

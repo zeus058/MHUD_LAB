@@ -38,14 +38,16 @@ import vn.edu.hcmus.securechat.common.exception.PkiException;
  * - Kiểm tra CSR hợp lệ
  * - Cấp chứng chỉ X.509 v3 (RSA-2048)
  * - Ký chứng chỉ bằng CA Private Key
- * - Thiết lập các extension bắt buộc (KeyUsage, ExtendedKeyUsage, BasicConstraints)
+ * - Thiết lập các extension bắt buộc (KeyUsage, ExtendedKeyUsage,
+ * BasicConstraints)
  */
 public class CertificateAuthority {
 
     private static final Logger log = LoggerFactory.getLogger(CertificateAuthority.class);
 
     private static final String CA_ALIAS = "securechat-ca";
-    private static final String SIGNATURE_ALGORITHM = "SHA256withRSA"; // RSA-PSS mặc dù tốt hơn nhưng BouncyCastle v1.78 hỗ trợ đầy đủ
+    private static final String SIGNATURE_ALGORITHM = "SHA256withRSA"; // RSA-PSS mặc dù tốt hơn nhưng BouncyCastle
+                                                                       // v1.78 hỗ trợ đầy đủ
     private static final int CERTIFICATE_VALIDITY_DAYS = 365;
     private static final int CERTIFICATE_VALIDITY_MS = CERTIFICATE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 
@@ -75,12 +77,11 @@ public class CertificateAuthority {
      */
     private void initializeCaKeys() throws KeyStoreException, NoSuchAlgorithmException {
         KeyStore ks = KeyStoreManager.loadPersonalStore();
-        
+
         if (!ks.containsAlias(CA_ALIAS)) {
             throw new KeyStoreException(
-                "CA Private Key alias '" + CA_ALIAS + "' not found in Windows-MY KeyStore. " +
-                "Please create CA certificate first using: certutil -importpfx ca-cert.pfx"
-            );
+                    "CA Private Key alias '" + CA_ALIAS + "' not found in Windows-MY KeyStore. " +
+                            "Please create CA certificate first using: certutil -importpfx ca-cert.pfx");
         }
 
         try {
@@ -88,10 +89,9 @@ public class CertificateAuthority {
             caCertificate = (X509Certificate) ks.getCertificate(CA_ALIAS);
 
             log.info("Loaded CA certificate: CN={}, NotBefore={}, NotAfter={}",
-                caCertificate.getSubjectX500Principal().getName(),
-                caCertificate.getNotBefore(),
-                caCertificate.getNotAfter()
-            );
+                    caCertificate.getSubjectX500Principal().getName(),
+                    caCertificate.getNotBefore(),
+                    caCertificate.getNotAfter());
         } catch (NoSuchAlgorithmException | UnrecoverableKeyException e) {
             throw new KeyStoreException("Failed to load CA key/cert from Windows-MY", e);
         }
@@ -100,7 +100,8 @@ public class CertificateAuthority {
     /**
      * Cấp chứng chỉ X.509 v3 mới cho subject.
      *
-     * @param subjectDn X.500 DN của subject (ví dụ: "CN=user@example.com,O=Company,C=US")
+     * @param subjectDn        X.500 DN của subject (ví dụ:
+     *                         "CN=user@example.com,O=Company,C=US")
      * @param subjectPublicKey Public Key của subject (RSA)
      * @return DER-encoded X.509 certificate
      */
@@ -118,20 +119,18 @@ public class CertificateAuthority {
 
             // Tạo builder
             X509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
-                caCertificate.getSubjectX500Principal(),
-                serialNumber,
-                notBefore,
-                notAfter,
-                new javax.security.auth.x500.X500Principal(subjectDn),
-                subjectPublicKey
-            );
+                    caCertificate.getSubjectX500Principal(),
+                    serialNumber,
+                    notBefore,
+                    notAfter,
+                    new javax.security.auth.x500.X500Principal(subjectDn),
+                    subjectPublicKey);
 
             // Thêm extensions
             addExtensions(certBuilder);
 
-            // Ký chứng chỉ (Sử dụng SunMSCAPI để hỗ trợ key của Windows)
+            // Ký chứng chỉ (Sử dụng provider thích hợp với loại key)
             ContentSigner signer = new JcaContentSignerBuilder(SIGNATURE_ALGORITHM)
-                    .setProvider("SunMSCAPI")
                     .build(caPrivateKey);
 
             // Convert sang X.509Certificate
@@ -143,8 +142,7 @@ public class CertificateAuthority {
                     serialNumber.toString(16),
                     subjectDn,
                     notBefore,
-                    notAfter
-            );
+                    notAfter);
 
             return cert.getEncoded();
 
@@ -171,28 +169,26 @@ public class CertificateAuthority {
         // ...
         int keyUsageBits = KeyUsage.digitalSignature | KeyUsage.keyEncipherment;
         certBuilder.addExtension(
-            org.bouncycastle.asn1.x509.Extension.keyUsage,
-            true,  // critical
-            new KeyUsage(keyUsageBits)
-        );
+                org.bouncycastle.asn1.x509.Extension.keyUsage,
+                true, // critical
+                new KeyUsage(keyUsageBits));
 
         // BasicConstraints (phân biệt CA vs end entity)
         certBuilder.addExtension(
-            org.bouncycastle.asn1.x509.Extension.basicConstraints,
-            true,  // critical
-            new BasicConstraints(false) // false = not CA
+                org.bouncycastle.asn1.x509.Extension.basicConstraints,
+                true, // critical
+                new BasicConstraints(false) // false = not CA
         );
 
         // ExtendedKeyUsage (xác định ứng dụng cụ thể)
         // Sử dụng serverAuth + clientAuth để tương thích TLS
         certBuilder.addExtension(
-            org.bouncycastle.asn1.x509.Extension.extendedKeyUsage,
-            false, // not critical
-            new ExtendedKeyUsage(new KeyPurposeId[]{
-                KeyPurposeId.id_kp_serverAuth,
-                KeyPurposeId.id_kp_clientAuth
-            })
-        );
+                org.bouncycastle.asn1.x509.Extension.extendedKeyUsage,
+                false, // not critical
+                new ExtendedKeyUsage(new KeyPurposeId[] {
+                        KeyPurposeId.id_kp_serverAuth,
+                        KeyPurposeId.id_kp_clientAuth
+                }));
     }
 
     /**
@@ -236,7 +232,7 @@ public class CertificateAuthority {
         KeyStore ks = KeyStoreManager.loadPersonalStore();
         java.security.cert.Certificate[] certChain = ks.getCertificateChain(CA_ALIAS);
         if (certChain == null) {
-            return new X509Certificate[]{caCertificate};
+            return new X509Certificate[] { caCertificate };
         }
         X509Certificate[] x509Chain = new X509Certificate[certChain.length];
         for (int i = 0; i < certChain.length; i++) {

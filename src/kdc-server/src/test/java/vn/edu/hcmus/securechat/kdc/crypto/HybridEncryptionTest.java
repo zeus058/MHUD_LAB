@@ -24,6 +24,7 @@ import vn.edu.hcmus.securechat.common.exception.CryptoException;
  * - Sai private key → exception
  * - Empty plaintext
  */
+@SuppressWarnings("deprecation")
 class HybridEncryptionTest {
 
     private static KeyPair rsaKeyPair;

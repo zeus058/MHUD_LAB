@@ -8,7 +8,9 @@ import java.awt.geom.RoundRectangle2D;
  * RoundedPanel — JPanel với bo góc và border tuỳ chỉnh.
  * Dùng làm card nền, bubble chat, badge, v.v.
  */
-public class RoundedPanel extends JPanel {
+@SuppressWarnings({"serial", "this-escape"})
+public @SuppressWarnings({"serial", "this-escape"})
+class RoundedPanel extends JPanel {
 
     private int radius;
     private Color borderColor;

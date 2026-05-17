@@ -38,7 +38,9 @@ public class KerberosClient {
             // 1. Tải KeyStore
             PkiManager.loadKeyStore(username, password);
         } catch (Exception e) {
-            throw new Exception("Không tìm thấy chứng chỉ người dùng hoặc mật khẩu sai. Vui lòng đăng ký trước hoặc kiểm tra lại thông tin.", e);
+            throw new Exception(
+                    "Không tìm thấy chứng chỉ người dùng hoặc mật khẩu sai. Vui lòng đăng ký trước hoặc kiểm tra lại thông tin.",
+                    e);
         }
 
         try {
@@ -48,23 +50,24 @@ public class KerberosClient {
             req.setTargetTgs("TGS_SERVER");
             String nonce = UUID.randomUUID().toString();
             req.setNonce(nonce);
-            
+
             byte[] certDer = PkiManager.getCertificate().getEncoded();
             req.setCert(Base64.getEncoder().encodeToString(certDer));
 
             // 3. Gửi qua mạng tới AS Server
-            PacketFrame frame = new PacketFrame(PacketFrame.TYPE_TGT_REQUEST, (byte)1, (short)0, JsonSerializer.toBytes(req));
+            PacketFrame frame = new PacketFrame(PacketFrame.TYPE_TGT_REQUEST, (byte) 1, (short) 0,
+                    JsonSerializer.toBytes(req));
             PacketFrame response = SocketClient.sendRequest(ServerConfig.AS_HOST, ServerConfig.AS_PORT, frame);
-            
+
             if (response.getType() == PacketFrame.TYPE_TGT_RESPONSE) {
                 log.info("Nhận được TGT_RESPONSE. Thực hiện giải mã Hybrid...");
                 TgtResponse tgtResp = JsonSerializer.fromBytes(response.getPayload(), TgtResponse.class);
-                
+
                 // 4. Giải mã response inner bằng Private Key của client
                 byte[] cipherBytes = Base64.getDecoder().decode(tgtResp.getResponse());
                 byte[] innerBytes = HybridCrypto.decrypt(PkiManager.getPrivateKey(), cipherBytes);
                 TgtResponseInner inner = JsonSerializer.fromBytes(innerBytes, TgtResponseInner.class);
-                
+
                 if (!nonce.equals(inner.getNonce())) {
                     throw new Exception("Nonce trong TGT_RESPONSE không khớp. Vui lòng thử lại.");
                 }
@@ -72,7 +75,7 @@ public class KerberosClient {
                 // 5. Lưu vé (gồm chuỗi TGT mã hoá và K_A_TGS) vào đĩa
                 String cacheData = tgtResp.getTgt() + "|||" + inner.getSessionKey();
                 TicketCache.saveTicket("TGT", cacheData.getBytes(StandardCharsets.UTF_8), new String(password));
-                
+
                 log.info("Xác thực Kerberos AS thành công! Đã lưu TGT và SessionKey K_A_TGS.");
                 return;
             } else {
@@ -106,7 +109,8 @@ public class KerberosClient {
             String kaTgsBase64 = parts[1];
             byte[] kaTgsBytes = Base64.getDecoder().decode(kaTgsBase64);
 
-            // 2. Tạo Authenticator (timestamp tính bằng SECONDS, khớp với ReplayDefenseService)
+            // 2. Tạo Authenticator (timestamp tính bằng SECONDS, khớp với
+            // ReplayDefenseService)
             long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
             String authNonce = java.util.UUID.randomUUID().toString();
             AuthenticatorJson auth = new AuthenticatorJson(username, timestamp, authNonce);
@@ -115,30 +119,30 @@ public class KerberosClient {
             String authBase64 = Base64.getEncoder().encodeToString(encryptedAuth);
 
             // 3. Tạo ST_REQUEST
-            String nonce = java.util.UUID.randomUUID().toString();
-            StRequest req = new StRequest(tgtBase64, authBase64, targetService, nonce);
+            StRequest req = new StRequest(tgtBase64, authBase64, targetService);
             byte[] reqBytes = JsonSerializer.toBytes(req);
-            PacketFrame frame = new PacketFrame(PacketFrame.TYPE_ST_REQUEST, (byte)1, (short)0, reqBytes);
-            
+            PacketFrame frame = new PacketFrame(PacketFrame.TYPE_ST_REQUEST, (byte) 1, (short) 0, reqBytes);
+
             log.info("Gửi ST_REQUEST lên TGS...");
             PacketFrame response = SocketClient.sendRequest("localhost", 8882, frame);
-            
+
             if (response.getType() == PacketFrame.TYPE_ST_RESPONSE) {
                 log.info("Nhận được ST_RESPONSE. Đang giải mã...");
                 StResponse stResp = JsonSerializer.fromBytes(response.getPayload(), StResponse.class);
-                
+
                 // Giải mã response inner
                 byte[] cipherBytes = Base64.getDecoder().decode(stResp.getResponse());
                 byte[] innerBytes = AesGcmCipher.decrypt(kaTgsBytes, cipherBytes);
                 StResponseInner inner = JsonSerializer.fromBytes(innerBytes, StResponseInner.class);
-                
-                if (!nonce.equals(inner.getNonce())) {
+
+                if (!authNonce.equals(inner.getNonce())) {
                     throw new Exception("Nonce trong ST_RESPONSE không khớp.");
                 }
 
                 // Lưu ST và K_A_Chat
                 String stCacheData = stResp.getSt() + "|||" + inner.getSessionKey();
-                TicketCache.saveTicket("ST_" + targetService, stCacheData.getBytes(StandardCharsets.UTF_8), new String(password));
+                TicketCache.saveTicket("ST_" + targetService, stCacheData.getBytes(StandardCharsets.UTF_8),
+                        new String(password));
                 log.info("Xác thực Kerberos TGS thành công! Đã lưu ST và SessionKey K_A_Chat.");
                 return;
             } else {

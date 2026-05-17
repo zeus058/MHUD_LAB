@@ -45,7 +45,9 @@ import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
 /**
  * Giao diện chat chính — danh sách user, khu vực tin nhắn, Security Monitor.
  */
-public class ChatPanel extends JPanel {
+@SuppressWarnings({"serial", "this-escape"})
+public @SuppressWarnings({"serial", "this-escape"})
+class ChatPanel extends JPanel {
 
     private static final Logger log = LoggerFactory.getLogger(ChatPanel.class);
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
@@ -360,7 +362,8 @@ public class ChatPanel extends JPanel {
         messageContainer.repaint();
     }
 
-    private static final class MessageBubble extends JPanel {
+    private static final @SuppressWarnings({"serial", "this-escape"})
+class MessageBubble extends JPanel {
 
         MessageBubble(String text, String time, boolean outgoing) {
             setLayout(new BorderLayout(0, 4));
@@ -401,7 +404,8 @@ public class ChatPanel extends JPanel {
         }
     }
 
-    private static final class UserCellRenderer extends DefaultListCellRenderer {
+    private static final @SuppressWarnings({"serial", "this-escape"})
+class UserCellRenderer extends DefaultListCellRenderer {
 
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,

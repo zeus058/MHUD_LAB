@@ -27,7 +27,9 @@ import vn.edu.hcmus.securechat.common.protocol.dto.CertificateSigningRequest;
 /**
  * Form đăng ký — tạo CSR gửi CA, nhận Certificate.
  */
-public class RegisterPanel extends JPanel {
+@SuppressWarnings({"serial", "this-escape"})
+public @SuppressWarnings({"serial", "this-escape"})
+class RegisterPanel extends JPanel {
 
     private static final Logger log = LoggerFactory.getLogger(RegisterPanel.class);
 

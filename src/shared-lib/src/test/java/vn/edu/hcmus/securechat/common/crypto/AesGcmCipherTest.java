@@ -70,7 +70,7 @@ class AesGcmCipherTest {
         byte[] encrypted = AesGcmCipher.encrypt(key, plaintext);
         
         // Tamper with the MAC tag (last byte)
-        encrypted[encrypted.length - 1] ^= 0xFF;
+        encrypted[encrypted.length - 1] ^= (byte) 0xFF;
 
         assertThrows(MacVerificationException.class, () -> {
             AesGcmCipher.decrypt(key, encrypted);

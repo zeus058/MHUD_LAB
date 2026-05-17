@@ -23,7 +23,7 @@ import vn.edu.hcmus.securechat.common.protocol.dto.StRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.StResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.StResponseInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtInner;
-import vn.edu.hcmus.securechat.kdc.crypto.HybridEncryption;
+import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
 import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
 
 /**

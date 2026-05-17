@@ -10,7 +10,9 @@ import java.awt.geom.Ellipse2D;
  * AvatarLabel — Hiển thị avatar hình tròn với chữ viết tắt và màu sắc theo palette.
  * Dùng ở sidebar contact list, chat header, sidebar footer.
  */
-public class AvatarLabel extends JComponent {
+@SuppressWarnings({"serial", "this-escape"})
+public @SuppressWarnings({"serial", "this-escape"})
+class AvatarLabel extends JComponent {
 
     private String initials;
     private Color bgColor;

@@ -4,6 +4,7 @@ package vn.edu.hcmus.securechat.kdc.crypto;
  * @deprecated Đã chuyển sang shared-lib: {@link vn.edu.hcmus.securechat.common.crypto.HybridEncryption}.
  * File này giữ lại để backward compatibility — delegate tất cả sang shared-lib.
  */
+@Deprecated
 public final class HybridEncryption {
 
     private HybridEncryption() {}

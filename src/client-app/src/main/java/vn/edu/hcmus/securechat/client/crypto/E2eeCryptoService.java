@@ -112,6 +112,7 @@ public class E2eeCryptoService {
     }
 
     /** @deprecated Dùng performHandshake(username, password) */
+    @Deprecated
     public boolean performHandshake() {
         log.warn("performHandshake() không tham số được gọi — dùng Mock key");
         try {

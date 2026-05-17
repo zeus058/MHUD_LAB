@@ -37,8 +37,8 @@ public class OcspResponder {
     private final X509Certificate ocspCertificate;
 
     public OcspResponder(CertificateStorage certStorage,
-                        PrivateKey ocspPrivateKey,
-                        X509Certificate ocspCertificate) {
+            PrivateKey ocspPrivateKey,
+            X509Certificate ocspCertificate) {
         this.certStorage = certStorage;
         this.ocspPrivateKey = ocspPrivateKey;
         this.ocspCertificate = ocspCertificate;
@@ -83,8 +83,8 @@ public class OcspResponder {
                     if (certInfo.isPresent()) {
                         CertificateInfo info = certInfo.get();
                         response.setRevokedAt(info.revocationTime);
-                        response.setRevocationReason(info.revocationReason != null ?
-                                info.revocationReason : "unspecified");
+                        response.setRevocationReason(
+                                info.revocationReason != null ? info.revocationReason : "unspecified");
                     }
                     log.warn("OCSP response: serial={}, status=REVOKED, reason={}",
                             certSerial, response.getRevocationReason());
@@ -123,10 +123,10 @@ public class OcspResponder {
     private byte[] createResponseBody(OcspResponse response) {
         // Tạo string từ các trường quan trọng
         String body = response.getCertStatus() + "|" +
-                      response.getThisUpdate() + "|" +
-                      response.getNextUpdate() + "|" +
-                      (response.getRevokedAt() != null ? response.getRevokedAt() : "0") + "|" +
-                      (response.getRevocationReason() != null ? response.getRevocationReason() : "");
+                response.getThisUpdate() + "|" +
+                response.getNextUpdate() + "|" +
+                (response.getRevokedAt() != null ? response.getRevokedAt() : "0") + "|" +
+                (response.getRevocationReason() != null ? response.getRevocationReason() : "");
         return body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
@@ -135,7 +135,7 @@ public class OcspResponder {
      * Sử dụng SHA256withRSA.
      */
     private byte[] signOcspResponse(byte[] responseBody) throws Exception {
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA", "SunMSCAPI");
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
         sig.initSign(ocspPrivateKey);
         sig.update(responseBody);
         return sig.sign();
@@ -154,8 +154,8 @@ public class OcspResponder {
             byte[] signature = Base64.getDecoder().decode(response.getSignature());
             return sig.verify(signature);
 
-        } catch (java.security.NoSuchAlgorithmException | java.security.InvalidKeyException |
-                 java.security.SignatureException | IllegalArgumentException e) {
+        } catch (java.security.NoSuchAlgorithmException | java.security.InvalidKeyException
+                | java.security.SignatureException | IllegalArgumentException e) {
             log.error("OCSP response signature verification failed", e);
             return false;
         }
