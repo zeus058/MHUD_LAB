@@ -1,0 +1,15 @@
+<configuration>
+  <appender name="TEST_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="securechat.audit" level="INFO" additivity="false">
+    <appender-ref ref="TEST_CONSOLE"/>
+  </logger>
+
+  <root level="WARN">
+    <appender-ref ref="TEST_CONSOLE"/>
+  </root>
+</configuration>
