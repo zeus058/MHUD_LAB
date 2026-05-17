@@ -3,6 +3,8 @@ package vn.edu.hcmus.securechat.chat;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.security.KeyPair;
+import java.security.PublicKey;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
@@ -15,13 +17,17 @@ import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import vn.edu.hcmus.securechat.chat.crypto.ChatKeyManager;
+import vn.edu.hcmus.securechat.chat.service.OcspStaplingManager;
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
+import vn.edu.hcmus.securechat.common.crypto.EcdheService;
 import vn.edu.hcmus.securechat.common.crypto.HkdfKeyDerivation;
+import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
+import vn.edu.hcmus.securechat.common.crypto.KyberKemService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.common.exception.ControlVectorException;
 import vn.edu.hcmus.securechat.common.exception.CryptoException;
@@ -35,6 +41,9 @@ import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.MessageType;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope;
 import vn.edu.hcmus.securechat.common.protocol.dto.ErrorResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
 
@@ -56,6 +65,10 @@ public class ChatServerMain {
     private final Map<Socket, Object> socketWriteLocks = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
+    
+    private ChatKeyManager keyManager;
+    private OcspStaplingManager ocspManager;
+    private KeyPair serverKyberPair;
 
     public ChatServerMain() {
         this.port = ServerConfig.CHAT_PORT;
@@ -73,6 +86,25 @@ public class ChatServerMain {
         log.info("  Chat Server starting on port {}...", port);
         log.info("========================================");
 
+        try {
+            // 1. Initialize Key Manager
+            keyManager = new ChatKeyManager();
+            
+            // 2. Initialize OCSP Stapling
+            String serialHex = keyManager.getChatCertificate().getSerialNumber().toString(16);
+            String issuerDn = keyManager.getChatCertificate().getIssuerX500Principal().getName();
+            ocspManager = new OcspStaplingManager(serialHex, issuerDn);
+            ocspManager.start();
+
+            // 3. Initialize ML-KEM-768 KeyPair
+            serverKyberPair = KyberKemService.generateKeyPair();
+            log.info("ML-KEM-768 key pair generated for Chat Server");
+            
+        } catch (Exception e) {
+            log.error("Failed to initialize Chat Server dependencies", e);
+            return;
+        }
+
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             log.info("Chat Server is READY - listening on port {}", port);
             auditLog.info("CHAT_SERVER_STARTED port={}", port);
@@ -87,6 +119,7 @@ public class ChatServerMain {
         } finally {
             threadPool.shutdown();
             replayDefense.shutdown();
+            if (ocspManager != null) ocspManager.shutdown();
             log.info("Chat Server stopped.");
         }
     }
@@ -100,6 +133,12 @@ public class ChatServerMain {
                 MessageType type = MessageType.fromByte(frame.getType());
 
                 log.info("Received {} from {}", type, clientAddr);
+
+                if (ocspManager != null && !ocspManager.isCertValid()) {
+                    log.warn("Chat Server certificate is not valid according to OCSP. Rejecting request.");
+                    sendError(socket, ErrorResponse.ERR_CERT_INVALID, "Server certificate is invalid");
+                    break;
+                }
 
                 switch (type) {
                     case CHAT_HANDSHAKE -> handleHandshake(frame, socket, clientAddr);
@@ -128,6 +167,7 @@ public class ChatServerMain {
         String clientId = null;
         byte[] ticketSessionKey = null;
         byte[] masterSessionKey = null;
+        KeyPair ecdhePair = null;
 
         try {
             ChatHandshakeRequest request = JsonSerializer.fromBytes(frame.getPayload(), ChatHandshakeRequest.class);
@@ -140,7 +180,10 @@ public class ChatServerMain {
             AuthenticatorJson auth = parseAuthenticator(request, ticketSessionKey);
             validateAuthenticator(serviceTicket, auth);
 
-            masterSessionKey = deriveMasterKeyIfPresent(request, ticketSessionKey);
+            // ECDHE + Kyber Handshake
+            ecdhePair = EcdheService.generateKeyPair();
+            masterSessionKey = deriveMasterKeyIfPresent(request, ticketSessionKey, ecdhePair);
+            
             ClientSession session = new ClientSession(
                     clientId,
                     socket,
@@ -154,11 +197,15 @@ public class ChatServerMain {
             }
             clientIdsBySocket.put(socket, clientId);
 
+            String ecdhePubKeyBase64 = EcdheService.encodePublicKey(ecdhePair.getPublic());
+            
             ChatHandshakeResponse response = new ChatHandshakeResponse(
                     "OK",
                     clientId,
+                    ecdhePubKeyBase64,
                     serviceTicket.getExpiresAt(),
                     masterSessionKey != ticketSessionKey);
+                    
             writeFrame(socket, PacketFrame.TYPE_CHAT_HANDSHAKE, JsonSerializer.toBytes(response));
 
             auditLog.info("SESSION_ESTABLISHED clientId={} ip={} expiresAt={}",
@@ -223,24 +270,18 @@ public class ChatServerMain {
     }
 
     private StInner parseServiceTicket(ChatHandshakeRequest request)
-            throws ProtocolException, InvalidTicketException {
+            throws ProtocolException, InvalidTicketException, CryptoException {
         if (request == null || isBlank(request.getSt())) {
             throw new InvalidTicketException("Missing service ticket");
         }
 
-        String st = request.getSt().trim();
-        byte[] ticketBytes;
-        if (st.startsWith("{")) {
-            ticketBytes = st.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        } else {
-            ticketBytes = decodeRequired(st, "st");
-        }
+        byte[] ticketBytes = decodeRequired(request.getSt(), "st");
 
         try {
-            return JsonSerializer.fromBytes(ticketBytes, StInner.class);
-        } catch (ProtocolException e) {
-            throw new InvalidTicketException(
-                    "Encrypted ST is not supported until hybrid decrypt is added to shared-lib", e);
+            byte[] decryptedStBytes = HybridEncryption.decrypt(keyManager.getChatPrivateKey(), ticketBytes);
+            return JsonSerializer.fromBytes(decryptedStBytes, StInner.class);
+        } catch (CryptoException e) {
+            throw new InvalidTicketException("Failed to decrypt ST", e);
         }
     }
 
@@ -289,9 +330,9 @@ public class ChatServerMain {
         replayDefense.validateAuthenticator(auth);
     }
 
-    private byte[] deriveMasterKeyIfPresent(ChatHandshakeRequest request, byte[] ticketSessionKey)
+    private byte[] deriveMasterKeyIfPresent(ChatHandshakeRequest request, byte[] ticketSessionKey, KeyPair ecdhePair)
             throws CryptoException, ProtocolException {
-        if (isBlank(request.getSsEcdhe()) || isBlank(request.getSsKyber()) || isBlank(request.getSessionNonce())) {
+        if (isBlank(request.getEcdhePubKey()) || isBlank(request.getKyberCiphertext()) || isBlank(request.getSessionNonce())) {
             return ticketSessionKey;
         }
 
@@ -299,8 +340,15 @@ public class ChatServerMain {
         byte[] ssKyber = null;
         byte[] sessionNonce = null;
         try {
-            ssEcdhe = decodeRequired(request.getSsEcdhe(), "ssEcdhe");
-            ssKyber = decodeRequired(request.getSsKyber(), "ssKyber");
+            // 1. Calculate ECDHE shared secret
+            PublicKey clientEcdhePubKey = EcdheService.decodePublicKey(request.getEcdhePubKey());
+            ssEcdhe = EcdheService.computeSharedSecret(ecdhePair.getPrivate(), clientEcdhePubKey);
+            
+            // 2. Decapsulate Kyber shared secret
+            byte[] kyberCiphertext = decodeRequired(request.getKyberCiphertext(), "kyberCiphertext");
+            ssKyber = KyberKemService.decapsulate(serverKyberPair.getPrivate(), kyberCiphertext);
+            
+            // 3. Derive master key
             sessionNonce = decodeRequired(request.getSessionNonce(), "sessionNonce");
             return HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, sessionNonce);
         } finally {
@@ -395,6 +443,9 @@ public class ChatServerMain {
     public void stop() {
         running = false;
         replayDefense.shutdown();
+        if (ocspManager != null) {
+            ocspManager.shutdown();
+        }
     }
 
     private static boolean isBlank(String value) {
@@ -435,80 +486,6 @@ public class ChatServerMain {
 
         String sessionId() {
             return Integer.toHexString(System.identityHashCode(socket));
-        }
-    }
-
-    private static final class ChatHandshakeRequest {
-        @JsonProperty("st")
-        private String st;
-
-        @JsonProperty("authenticator")
-        private String authenticator;
-
-        @JsonProperty("ssEcdhe")
-        private String ssEcdhe;
-
-        @JsonProperty("ssKyber")
-        private String ssKyber;
-
-        @JsonProperty("sessionNonce")
-        private String sessionNonce;
-
-        String getSt() {
-            return st;
-        }
-
-        String getAuthenticator() {
-            return authenticator;
-        }
-
-        String getSsEcdhe() {
-            return ssEcdhe;
-        }
-
-        String getSsKyber() {
-            return ssKyber;
-        }
-
-        String getSessionNonce() {
-            return sessionNonce;
-        }
-    }
-
-    private static final class ChatHandshakeResponse {
-        @JsonProperty("status")
-        private final String status;
-
-        @JsonProperty("clientId")
-        private final String clientId;
-
-        @JsonProperty("expiresAt")
-        private final long expiresAt;
-
-        @JsonProperty("masterKeyDerived")
-        private final boolean masterKeyDerived;
-
-        ChatHandshakeResponse(String status, String clientId, long expiresAt, boolean masterKeyDerived) {
-            this.status = status;
-            this.clientId = clientId;
-            this.expiresAt = expiresAt;
-            this.masterKeyDerived = masterKeyDerived;
-        }
-    }
-
-    private static final class EncryptedChatEnvelope {
-        @JsonProperty("recipientId")
-        private String recipientId;
-
-        @JsonProperty("payload")
-        private String payload;
-
-        String getRecipientId() {
-            return recipientId;
-        }
-
-        String getPayload() {
-            return payload;
         }
     }
 }

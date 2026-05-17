@@ -1,8 +1,8 @@
 {
   "aes_gcm": {
-    "key":                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "nonce":              "000000000000000000000000",
-    "plaintext":          "SecureChat-TestVector-v1",
+    "key":        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "nonce":      "000000000000000000000000",
+    "plaintext":  "SecureChat-TestVector-v1",
     "ciphertext_and_tag": "5dd9d6abc749c0d569dc84617d5fe5cfb720223c5aac161e98ea13d3c859cf899166bac38d7a68c4"
   },
   "hkdf": {
@@ -13,9 +13,9 @@
     "expected_master_key": "fa014de41eabff2ec60263685cbc6380fe9361c229c2fbeada1eb8ec64fa0120"
   },
   "pbkdf2": {
-    "password":           "TestPassword123",
-    "salt":               "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-    "iterations":         100000,
-    "expected_key":       "85a9d3347303cf88acb762e19349cdd370264593eaa6ff4106ac14dc5c7efd7a"
+    "password":   "TestPassword123",
+    "salt":       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "iterations": 100000,
+    "expected_key": "85a9d3347303cf88acb762e19349cdd370264593eaa6ff4106ac14dc5c7efd7a"
   }
 }

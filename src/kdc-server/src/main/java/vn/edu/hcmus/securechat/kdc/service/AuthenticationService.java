@@ -1,0 +1,177 @@
+package vn.edu.hcmus.securechat.kdc.service;
+
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.Base64;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
+import vn.edu.hcmus.securechat.common.exception.CertificateRevokedException;
+import vn.edu.hcmus.securechat.common.exception.ChainValidationException;
+import vn.edu.hcmus.securechat.common.exception.CryptoException;
+import vn.edu.hcmus.securechat.common.exception.PkiException;
+import vn.edu.hcmus.securechat.common.exception.ProtocolException;
+import vn.edu.hcmus.securechat.common.protocol.ControlVector;
+import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
+import vn.edu.hcmus.securechat.common.protocol.dto.TgtInner;
+import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponseInner;
+import vn.edu.hcmus.securechat.kdc.crypto.HybridEncryption;
+import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
+
+/**
+ * Authentication Server (AS) — Xử lý TGT Request.
+ *
+ * Luồng theo BaoCao_SecureChat.md Giai đoạn 2:
+ * 1. Client gửi TgtRequest (clientId, targetTgs, nonce, cert)
+ * 2. AS xác minh chứng chỉ (chain validation + OCSP check)
+ * 3. AS sinh session key K_A_TGS (32 bytes)
+ * 4. AS tạo TgtInner, encrypt bằng PU_TGS (Hybrid Encrypt)
+ * 5. AS tạo TgtResponseInner, encrypt bằng PU_client
+ * 6. AS gửi TgtResponse (tgt + response)
+ */
+public class AuthenticationService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthenticationService.class);
+    private static final Logger auditLog = LoggerFactory.getLogger("securechat.audit");
+
+    private static final String TGT_CV =
+            ControlVector.ENCRYPT_ONLY + "|" + ControlVector.TGS_SERVICE + "|" + ControlVector.EXPIRY_8H;
+
+    private final KdcKeyManager keyManager;
+    private final OcspClient ocspClient;
+    private final vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage;
+
+    public AuthenticationService(KdcKeyManager keyManager, OcspClient ocspClient, vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage) {
+        this.keyManager = keyManager;
+        this.ocspClient = ocspClient;
+        this.storage = storage;
+    }
+
+    /**
+     * Xử lý TGT Request và trả về TGT Response.
+     *
+     * @param request TgtRequest từ Client
+     * @param clientIp IP của Client (cho audit log)
+     * @return TgtResponse chứa encrypted TGT + encrypted response
+     */
+    public TgtResponse issueTgt(TgtRequest request, String clientIp)
+            throws ProtocolException, PkiException, CryptoException,
+                   ChainValidationException, CertificateRevokedException {
+
+        byte[] sessionKey = null;
+        try {
+            // 1. Validate request fields
+            validateTgtRequest(request);
+
+            // 2. Decode và verify client certificate
+            byte[] certDer = Base64.getDecoder().decode(request.getCert());
+            X509Certificate clientCert = keyManager.decodeCertificate(certDer);
+
+            // 3. Chain validation (leaf → Root CA)
+            keyManager.validateCertificateChain(clientCert);
+            log.info("Certificate chain validated for client: {}",
+                    clientCert.getSubjectX500Principal().getName());
+
+            // 4. OCSP check — kiểm tra cert còn hợp lệ không
+            String certSerial = clientCert.getSerialNumber().toString(16);
+            String issuerDn = clientCert.getIssuerX500Principal().getName();
+            try {
+                ocspClient.verifyCertificateStatus(certSerial, issuerDn);
+            } catch (vn.edu.hcmus.securechat.common.exception.CertificateRevokedException e) {
+                log.error("Certificate is revoked: {}", e.getMessage());
+                throw e;
+            } catch (vn.edu.hcmus.securechat.common.exception.PkiException e) {
+                // Nếu CA không available, log warning và tiếp tục (graceful degradation)
+                log.warn("OCSP check failed (CA may be unavailable), continuing: {}", e.getMessage());
+                auditLog.warn("OCSP_UNAVAILABLE clientId={} ip={} reason={}",
+                        request.getClientId(), clientIp, e.getMessage());
+            }
+
+            // 5. Sinh session key K_A_TGS (32 bytes, SecureRandom)
+            sessionKey = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
+            new SecureRandom().nextBytes(sessionKey);
+            String sessionKeyB64 = Base64.getEncoder().encodeToString(sessionKey);
+
+            // 6. Tạo TgtInner
+            long now = Instant.now().getEpochSecond();
+            long expiresAt = now + CryptoConstants.TGT_LIFETIME_SECONDS;
+
+            TgtInner tgtInner = new TgtInner(
+                    request.getClientId(),
+                    request.getTargetTgs(),
+                    now,
+                    expiresAt,
+                    sessionKeyB64,
+                    true,   // renewable
+                    TGT_CV
+            );
+
+            // 7. Serialize TgtInner → JSON bytes
+            byte[] tgtInnerBytes = JsonSerializer.toBytes(tgtInner);
+
+            // 8. Hybrid Encrypt TgtInner bằng PU_TGS
+            byte[] encryptedTgt = HybridEncryption.encrypt(
+                    keyManager.getTgsPublicKey(), tgtInnerBytes);
+            String tgtB64 = Base64.getEncoder().encodeToString(encryptedTgt);
+
+            // 9. Tạo TgtResponseInner (chứa K_A_TGS cho Client)
+            TgtResponseInner responseInner = new TgtResponseInner(
+                    sessionKeyB64,
+                    request.getNonce(),
+                    request.getTargetTgs()
+            );
+
+            // 10. Serialize ResponseInner → JSON bytes
+            byte[] responseInnerBytes = JsonSerializer.toBytes(responseInner);
+
+            // 11. Hybrid Encrypt ResponseInner bằng PU_client
+            byte[] encryptedResponse = HybridEncryption.encrypt(
+                    clientCert.getPublicKey(), responseInnerBytes);
+            String responseB64 = Base64.getEncoder().encodeToString(encryptedResponse);
+
+            // 12. Audit log và DB record
+            auditLog.info("TGT_ISSUED clientId={} ip={} issued={} expires={}",
+                    request.getClientId(), clientIp, now, expiresAt);
+            
+            try {
+                storage.recordTgtIssued(request.getClientId(), request.getTargetTgs(), now, expiresAt, clientIp, TGT_CV);
+                storage.logAuditEvent("TGT_ISSUED", request.getClientId(), clientIp, "TGT issued", true);
+            } catch (Exception e) {
+                log.warn("Failed to record TGT issuance in storage", e);
+            }
+
+            log.info("TGT issued for client={}, expires={}",
+                    request.getClientId(), Instant.ofEpochSecond(expiresAt));
+
+            return new TgtResponse(tgtB64, responseB64);
+
+        } finally {
+            // Xóa session key khỏi bộ nhớ
+            if (sessionKey != null) Arrays.fill(sessionKey, (byte) 0);
+        }
+    }
+
+    /**
+     * Validate TGT request fields.
+     */
+    private void validateTgtRequest(TgtRequest request) throws ProtocolException {
+        if (request.getClientId() == null || request.getClientId().isBlank()) {
+            throw new ProtocolException("TGT request missing clientId");
+        }
+        if (request.getTargetTgs() == null || request.getTargetTgs().isBlank()) {
+            throw new ProtocolException("TGT request missing targetTgs");
+        }
+        if (request.getNonce() == null || request.getNonce().isBlank()) {
+            throw new ProtocolException("TGT request missing nonce");
+        }
+        if (request.getCert() == null || request.getCert().isBlank()) {
+            throw new ProtocolException("TGT request missing client certificate");
+        }
+    }
+}

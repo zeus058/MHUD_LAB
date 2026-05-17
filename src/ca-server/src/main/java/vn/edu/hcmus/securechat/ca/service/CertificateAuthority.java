@@ -54,6 +54,12 @@ public class CertificateAuthority {
         initializeCaKeys();
     }
 
+    // Constructor for testing
+    CertificateAuthority(PrivateKey caPrivateKey, X509Certificate caCertificate) {
+        this.caPrivateKey = caPrivateKey;
+        this.caCertificate = caCertificate;
+    }
+
     /**
      * Khởi tạo CA Private Key từ Windows KeyStore.
      * Nếu alias "securechat-ca" chưa tồn tại, sẽ throw exception.

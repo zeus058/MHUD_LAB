@@ -51,6 +51,7 @@ public class CaServerMain {
     private CertificateStorage certStorage;
     private CertificateAuthority ca;
     private OcspResponder ocspResponder;
+    private com.sun.net.httpserver.HttpServer adminHttpServer;
 
     public CaServerMain() {
         this.port = ServerConfig.CA_PORT;
@@ -87,6 +88,9 @@ public class CaServerMain {
                 ca.getCaCertificate()
             );
 
+            // Khởi tạo Admin HTTP API
+            startAdminApi();
+
             try (ServerSocket serverSocket = new ServerSocket(port)) {
                 log.info("CA Server is READY — listening on port {}", port);
                 auditLog.info("CA_SERVER_STARTED port={}", port);
@@ -103,6 +107,57 @@ public class CaServerMain {
         } finally {
             cleanup();
         }
+    }
+
+    private void startAdminApi() throws IOException {
+        adminHttpServer = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress(8080), 0);
+        adminHttpServer.createContext("/admin/revoke", (com.sun.net.httpserver.HttpExchange exchange) -> {
+            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                try {
+                    String query = exchange.getRequestURI().getQuery();
+                    if (query == null) throw new IllegalArgumentException("Missing query parameters");
+                    
+                    String serial = null;
+                    String reason = "unspecified";
+                    
+                    for (String param : query.split("&")) {
+                        String[] pair = param.split("=");
+                        if (pair.length > 1) {
+                            if ("serial".equals(pair[0])) serial = pair[1];
+                            if ("reason".equals(pair[0])) reason = pair[1];
+                        }
+                    }
+
+                    if (serial == null || serial.isEmpty()) {
+                        sendHttpError(exchange, 400, "Missing serial parameter");
+                        return;
+                    }
+
+                    certStorage.revokeCertificate(serial, reason);
+                    log.info("Admin revoked certificate: serial={}, reason={}", serial, reason);
+                    String response = "Certificate revoked successfully";
+                    exchange.sendResponseHeaders(200, response.length());
+                    java.io.OutputStream os = exchange.getResponseBody();
+                    os.write(response.getBytes());
+                    os.close();
+                } catch (Exception e) {
+                    log.error("Error revoking certificate via API", e);
+                    sendHttpError(exchange, 500, e.getMessage());
+                }
+            } else {
+                sendHttpError(exchange, 405, "Method Not Allowed");
+            }
+        });
+        adminHttpServer.setExecutor(threadPool);
+        adminHttpServer.start();
+        log.info("Admin API started on port 8080");
+    }
+
+    private void sendHttpError(com.sun.net.httpserver.HttpExchange exchange, int code, String message) throws IOException {
+        exchange.sendResponseHeaders(code, message.length());
+        java.io.OutputStream os = exchange.getResponseBody();
+        os.write(message.getBytes());
+        os.close();
     }
 
     private void handleClient(Socket socket) {
@@ -361,6 +416,9 @@ public class CaServerMain {
     }
 
     private void cleanup() {
+        if (adminHttpServer != null) {
+            adminHttpServer.stop(0);
+        }
         threadPool.shutdown();
         if (databaseManager != null) {
             databaseManager.close();
