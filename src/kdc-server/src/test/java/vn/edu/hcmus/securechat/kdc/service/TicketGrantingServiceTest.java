@@ -2,7 +2,6 @@ package vn.edu.hcmus.securechat.kdc.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
@@ -16,16 +15,12 @@ import org.junit.jupiter.api.Test;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
-import vn.edu.hcmus.securechat.common.exception.InvalidTicketException;
-import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.exception.ReplayAttackException;
 import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.StRequest;
-import vn.edu.hcmus.securechat.common.protocol.dto.StResponse;
-import vn.edu.hcmus.securechat.common.protocol.dto.StResponseInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtInner;
 import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
 

@@ -201,8 +201,7 @@ public final class UiStyles {
     }
 
     /** Panel bo góc với nền tùy chỉnh. */
-    public static @SuppressWarnings({"serial", "this-escape"})
-class RoundedPanel extends JPanel {
+    public static class RoundedPanel extends JPanel {
 
         private final int radius;
 
@@ -223,8 +222,7 @@ class RoundedPanel extends JPanel {
         }
     }
 
-    private static final @SuppressWarnings({"serial", "this-escape"})
-class RoundedLineBorder extends AbstractBorder {
+    private static final class RoundedLineBorder extends AbstractBorder {
 
         private final Color color;
         private final int thickness;

@@ -20,9 +20,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Form đăng nhập — username + password (char[]).
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class LoginPanel extends JPanel {
+public class LoginPanel extends JPanel {
 
     private static final Logger log = LoggerFactory.getLogger(LoginPanel.class);
 

@@ -18,9 +18,7 @@ import java.awt.geom.RoundRectangle2D;
  * Kết nối với UIController:
  * dialog.setLoginListener((username, password) -> controller.handleLogin(username, password));
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class LoginDialog extends JDialog {
+public class LoginDialog extends JDialog {
 
     // === UI Components ===
     private JTextField      tfUsername;

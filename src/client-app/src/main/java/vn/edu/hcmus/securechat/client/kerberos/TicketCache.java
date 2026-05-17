@@ -4,7 +4,6 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
-import java.util.Base64;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

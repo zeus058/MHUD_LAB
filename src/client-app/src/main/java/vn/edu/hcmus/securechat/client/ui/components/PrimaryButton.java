@@ -10,9 +10,7 @@ import java.awt.geom.RoundRectangle2D;
 /**
  * PrimaryButton — Nút bấm chính với màu PRIMARY, hiệu ứng hover và loading state.
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class PrimaryButton extends JButton {
+public class PrimaryButton extends JButton {
 
     private boolean loading = false;
     private boolean hovered = false;

@@ -31,9 +31,7 @@ import vn.edu.hcmus.securechat.client.db.LocalDatabase;
  * Client Application — Ứng dụng Desktop chat bảo mật E2EE.
  * Owner: Trúc Ngọc | Reviewer: Chị Bee
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class ClientApp extends JFrame {
+public class ClientApp extends JFrame {
 
     private static final long serialVersionUID = 1L;
     private static final Logger log = LoggerFactory.getLogger(ClientApp.class);

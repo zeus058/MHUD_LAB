@@ -12,6 +12,7 @@ public final class HybridEncryption {
     /**
      * @see vn.edu.hcmus.securechat.common.crypto.HybridEncryption#encrypt
      */
+    @Deprecated
     public static byte[] encrypt(java.security.PublicKey recipientPublicKey, byte[] plaintext)
             throws vn.edu.hcmus.securechat.common.exception.CryptoException {
         return vn.edu.hcmus.securechat.common.crypto.HybridEncryption.encrypt(recipientPublicKey, plaintext);
@@ -20,6 +21,7 @@ public final class HybridEncryption {
     /**
      * @see vn.edu.hcmus.securechat.common.crypto.HybridEncryption#decrypt
      */
+    @Deprecated
     public static byte[] decrypt(java.security.PrivateKey recipientPrivateKey, byte[] cipherData)
             throws vn.edu.hcmus.securechat.common.exception.CryptoException {
         return vn.edu.hcmus.securechat.common.crypto.HybridEncryption.decrypt(recipientPrivateKey, cipherData);

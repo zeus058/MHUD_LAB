@@ -16,9 +16,7 @@ import vn.edu.hcmus.securechat.client.model.SecurityState.ConnectionStatus;
 /**
  * Panel hiển thị trạng thái bảo mật real-time — theo Contrains.md mục 8.2.
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class SecurityMonitorPanel extends JPanel {
+public class SecurityMonitorPanel extends JPanel {
 
     private final JLabel statusValue;
     private final JLabel tgtValue;

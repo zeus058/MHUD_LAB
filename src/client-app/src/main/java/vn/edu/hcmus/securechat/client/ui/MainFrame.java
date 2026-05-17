@@ -21,9 +21,7 @@ import java.util.List;
  * frame.setContactSelectListener((contactId) -> controller.loadChat(contactId));
  * frame.setChatPanel(chatPanel);
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class MainFrame extends JFrame {
+public class MainFrame extends JFrame {
 
     // === UI ===
     private JSplitPane         mainSplit;

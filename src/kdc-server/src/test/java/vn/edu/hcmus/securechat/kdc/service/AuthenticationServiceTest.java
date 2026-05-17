@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 
 import vn.edu.hcmus.securechat.common.exception.CertificateRevokedException;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
 import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
 import vn.edu.hcmus.securechat.kdc.storage.KdcStorage;
 

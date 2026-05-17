@@ -1,20 +1,17 @@
 package vn.edu.hcmus.securechat.chat.crypto;
 
-import java.io.ByteArrayInputStream;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.common.crypto.KeyStoreManager;
-import vn.edu.hcmus.securechat.common.exception.PkiException;
 
 /**
  * Quản lý khóa cho Chat Server.

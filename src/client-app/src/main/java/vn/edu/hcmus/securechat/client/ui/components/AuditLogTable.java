@@ -19,9 +19,7 @@ import java.util.List;
  *   controller.setAuditLogTable(auditTable);
  *   auditTable.addEntry(new AuditEntry(...));
  */
-@SuppressWarnings({"serial", "this-escape"})
-public @SuppressWarnings({"serial", "this-escape"})
-class AuditLogTable extends JPanel {
+public class AuditLogTable extends JPanel {
 
     public enum EventType {
         LOGIN("Đăng nhập", new Color(0x9FE1CB), new Color(0x085041)),
@@ -228,8 +226,7 @@ class AuditLogTable extends JPanel {
 
     // ─── Cell Renderers ───
 
-    static @SuppressWarnings({"serial", "this-escape"})
-class AuditCellRenderer extends DefaultTableCellRenderer {
+    static class AuditCellRenderer extends DefaultTableCellRenderer {
         @Override
         public Component getTableCellRendererComponent(JTable t, Object val, boolean sel, boolean foc, int row, int col) {
             JLabel lbl = (JLabel) super.getTableCellRendererComponent(t, val, sel, foc, row, col);
@@ -242,8 +239,7 @@ class AuditCellRenderer extends DefaultTableCellRenderer {
         }
     }
 
-    static @SuppressWarnings({"serial", "this-escape"})
-class BadgeCellRenderer extends JPanel implements TableCellRenderer {
+    static class BadgeCellRenderer extends JPanel implements TableCellRenderer {
         private final JLabel badge = new JLabel();
 
         BadgeCellRenderer() {
@@ -274,8 +270,7 @@ class BadgeCellRenderer extends JPanel implements TableCellRenderer {
         }
     }
 
-    static @SuppressWarnings({"serial", "this-escape"})
-class StatusCellRenderer extends DefaultTableCellRenderer {
+    static class StatusCellRenderer extends DefaultTableCellRenderer {
         @Override
         public Component getTableCellRendererComponent(JTable t, Object val, boolean sel, boolean foc, int row, int col) {
             JLabel lbl = (JLabel) super.getTableCellRendererComponent(t, val, sel, foc, row, col);

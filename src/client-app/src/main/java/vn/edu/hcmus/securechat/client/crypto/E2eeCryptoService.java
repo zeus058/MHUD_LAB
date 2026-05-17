@@ -29,7 +29,6 @@ public class E2eeCryptoService {
 
     private byte[] masterSessionKey;
     private Socket chatSocket;
-    private String username;
 
     /**
      * Kết nối đến Chat Server và xác thực bằng ST (Service Ticket).
@@ -38,7 +37,6 @@ public class E2eeCryptoService {
      * @return true nếu handshake thành công
      */
     public void performHandshake(String username, String password) throws Exception {
-        this.username = username;
         log.info("Kết nối đến Chat Server {}:{}", ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
         try {
             // 1. Đọc ST từ TicketCache
