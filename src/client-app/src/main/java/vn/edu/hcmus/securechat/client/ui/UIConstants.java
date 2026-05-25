@@ -19,17 +19,27 @@ public final class UIConstants {
     public static final Color TEXT_MUTED = Color.decode("#94A3B8");
     /** Viền phân vùng nhẹ trên nền tối */
     public static final Color BORDER_SUBTLE = Color.decode("#2D3748");
+    /** Các surface mở rộng theo template HTML trong thư mục template/. */
+    public static final Color SURFACE = Color.decode("#0C141C");
+    public static final Color PANEL_BG = Color.decode("#1A242D");
+    public static final Color CARD_BG = Color.decode("#242F38");
+    public static final Color INPUT_BG = Color.decode("#212C36");
+    public static final Color INPUT_BG_ALT = Color.decode("#2D3843");
+    public static final Color LOG_BG = Color.decode("#24303A");
+    public static final Color SURFACE_HIGH = Color.decode("#232B33");
+    public static final Color OUTLINE = Color.decode("#3D4948");
 
-    public static final int CORNER_RADIUS = 14;
-    public static final int CORNER_RADIUS_SM = 10;
+    public static final int CORNER_RADIUS = 8;
+    public static final int CORNER_RADIUS_SM = 8;
     public static final int PADDING = 16;
     public static final int PADDING_SM = 10;
 
-    public static final Font FONT_TITLE = new Font("Segoe UI", Font.BOLD, 22);
-    public static final Font FONT_HEADING = new Font("Segoe UI", Font.BOLD, 15);
-    public static final Font FONT_BODY = new Font("Segoe UI", Font.PLAIN, 14);
-    public static final Font FONT_SMALL = new Font("Segoe UI", Font.PLAIN, 12);
-    public static final Font FONT_MONO = new Font("Consolas", Font.PLAIN, 12);
+    public static final Font FONT_TITLE = new Font("Manrope", Font.BOLD, 24);
+    public static final Font FONT_PAGE_TITLE = new Font("Manrope", Font.BOLD, 30);
+    public static final Font FONT_HEADING = new Font("Manrope", Font.BOLD, 16);
+    public static final Font FONT_BODY = new Font("Inter", Font.PLAIN, 14);
+    public static final Font FONT_SMALL = new Font("Inter", Font.PLAIN, 12);
+    public static final Font FONT_MONO = new Font("JetBrains Mono", Font.PLAIN, 12);
 
     private UIConstants() {
     }

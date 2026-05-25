@@ -22,6 +22,10 @@ public class PacketFrame {
     public static final byte TYPE_OCSP_REQUEST = 0x09;
     public static final byte TYPE_OCSP_RESPONSE = 0x0A;
     public static final byte TYPE_USER_LIST = 0x0B;
+    public static final byte TYPE_PREKEY_UPLOAD = 0x0C;
+    public static final byte TYPE_PREKEY_REQUEST = 0x0D;
+    public static final byte TYPE_PREKEY_RESPONSE = 0x0E;
+    public static final byte TYPE_E2EE_INIT = 0x0F;
     public static final byte TYPE_ERROR = (byte) 0xFF;
 
     private byte type;

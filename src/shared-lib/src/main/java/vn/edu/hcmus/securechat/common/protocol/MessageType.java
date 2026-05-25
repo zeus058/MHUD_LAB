@@ -23,6 +23,10 @@ public enum MessageType {
     OCSP_REQUEST(PacketFrame.TYPE_OCSP_REQUEST, "Client xin OCSP status"),
     OCSP_RESPONSE(PacketFrame.TYPE_OCSP_RESPONSE, "Server trả OCSP response"),
     USER_LIST(PacketFrame.TYPE_USER_LIST, "Server push danh sách user online"),
+    PREKEY_UPLOAD(PacketFrame.TYPE_PREKEY_UPLOAD, "Client upload Pre-Key Bundle"),
+    PREKEY_REQUEST(PacketFrame.TYPE_PREKEY_REQUEST, "Client xin Pre-Key Bundle"),
+    PREKEY_RESPONSE(PacketFrame.TYPE_PREKEY_RESPONSE, "Server trả Pre-Key Bundle"),
+    E2EE_INIT(PacketFrame.TYPE_E2EE_INIT, "E2EE init được ký transcript"),
     ERROR(PacketFrame.TYPE_ERROR, "Generic error response");
 
     private final byte code;

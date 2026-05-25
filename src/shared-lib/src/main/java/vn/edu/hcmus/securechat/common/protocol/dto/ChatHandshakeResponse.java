@@ -30,6 +30,9 @@ public class ChatHandshakeResponse {
     @JsonProperty("masterKeyDerived")
     private boolean masterKeyDerived;
 
+    @JsonProperty("accessTicket")
+    private String accessTicket;
+
     public ChatHandshakeResponse() {}
 
     public ChatHandshakeResponse(String status, String clientId, String ecdhePubKey,
@@ -39,6 +42,16 @@ public class ChatHandshakeResponse {
         this.ecdhePubKey = ecdhePubKey;
         this.expiresAt = expiresAt;
         this.masterKeyDerived = masterKeyDerived;
+    }
+
+    public ChatHandshakeResponse(String status, String clientId, String ecdhePubKey,
+                                  long expiresAt, boolean masterKeyDerived, String accessTicket) {
+        this.status = status;
+        this.clientId = clientId;
+        this.ecdhePubKey = ecdhePubKey;
+        this.expiresAt = expiresAt;
+        this.masterKeyDerived = masterKeyDerived;
+        this.accessTicket = accessTicket;
     }
 
     public String getStatus() { return status; }
@@ -55,4 +68,7 @@ public class ChatHandshakeResponse {
 
     public boolean isMasterKeyDerived() { return masterKeyDerived; }
     public void setMasterKeyDerived(boolean masterKeyDerived) { this.masterKeyDerived = masterKeyDerived; }
+
+    public String getAccessTicket() { return accessTicket; }
+    public void setAccessTicket(String accessTicket) { this.accessTicket = accessTicket; }
 }

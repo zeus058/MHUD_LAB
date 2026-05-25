@@ -9,8 +9,8 @@
     "ss_ecdhe":           "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
     "ss_kyber":           "eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011",
     "session_nonce":      "deadbeefdeadbeefdeadbeefdeadbeef",
-    "info":               "SecureChat-v1",
-    "expected_master_key": "fa014de41eabff2ec60263685cbc6380fe9361c229c2fbeada1eb8ec64fa0120"
+    "info":               "SecureChat-E2EE-v2",
+    "expected_master_key": "c054886af883fbb9da1fe22ba486d736eacba3625c58419976f630a1c4fab552"
   },
   "pbkdf2": {
     "password":   "TestPassword123",

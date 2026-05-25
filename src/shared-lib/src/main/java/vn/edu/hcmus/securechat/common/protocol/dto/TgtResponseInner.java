@@ -25,12 +25,35 @@ public class TgtResponseInner {
     @JsonProperty("targetTgs")
     private String targetTgs;
 
+    @JsonProperty("tgtId")
+    private String tgtId;
+
+    @JsonProperty("issuedAt")
+    private long issuedAt;
+
+    @JsonProperty("expiresAt")
+    private long expiresAt;
+
+    @JsonProperty("renewTill")
+    private long renewTill;
+
     public TgtResponseInner() {}
 
     public TgtResponseInner(String sessionKey, String nonce, String targetTgs) {
         this.sessionKey = sessionKey;
         this.nonce = nonce;
         this.targetTgs = targetTgs;
+    }
+
+    public TgtResponseInner(String sessionKey, String nonce, String targetTgs,
+                            String tgtId, long issuedAt, long expiresAt, long renewTill) {
+        this.sessionKey = sessionKey;
+        this.nonce = nonce;
+        this.targetTgs = targetTgs;
+        this.tgtId = tgtId;
+        this.issuedAt = issuedAt;
+        this.expiresAt = expiresAt;
+        this.renewTill = renewTill;
     }
 
     public String getSessionKey() { return sessionKey; }
@@ -41,4 +64,16 @@ public class TgtResponseInner {
 
     public String getTargetTgs() { return targetTgs; }
     public void setTargetTgs(String targetTgs) { this.targetTgs = targetTgs; }
+
+    public String getTgtId() { return tgtId; }
+    public void setTgtId(String tgtId) { this.tgtId = tgtId; }
+
+    public long getIssuedAt() { return issuedAt; }
+    public void setIssuedAt(long issuedAt) { this.issuedAt = issuedAt; }
+
+    public long getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(long expiresAt) { this.expiresAt = expiresAt; }
+
+    public long getRenewTill() { return renewTill; }
+    public void setRenewTill(long renewTill) { this.renewTill = renewTill; }
 }

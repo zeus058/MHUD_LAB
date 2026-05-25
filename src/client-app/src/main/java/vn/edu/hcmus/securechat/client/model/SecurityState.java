@@ -105,7 +105,7 @@ public class SecurityState {
     public static SecurityState fromRealSession(java.security.cert.X509Certificate cert) {
         SecurityState state = new SecurityState();
         state.status = ConnectionStatus.CONNECTED_E2EE;
-        state.encryption = "AES-256-GCM + ECDHE + Kyber-768";
+        state.encryption = "AES-256-GCM + ECDHE P-256 + ML-KEM-768 + Double Ratchet";
 
         // TGT/ST hết hạn sau 8 giờ kể từ lúc đăng nhập
         long expiresMs = System.currentTimeMillis() + 8 * 60 * 60 * 1000L;

@@ -1,72 +1,159 @@
 package vn.edu.hcmus.securechat.client.crypto;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.crypto.Argon2idKeyDerivation;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
+import vn.edu.hcmus.securechat.common.crypto.DilithiumSignatureService;
+import vn.edu.hcmus.securechat.common.crypto.DoubleRatchetSession;
+import vn.edu.hcmus.securechat.common.crypto.EcdheService;
+import vn.edu.hcmus.securechat.common.crypto.HkdfKeyDerivation;
+import vn.edu.hcmus.securechat.common.crypto.KyberKemService;
+import vn.edu.hcmus.securechat.common.exception.CryptoException;
+import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage;
+import vn.edu.hcmus.securechat.common.protocol.dto.E2eeInitMessage;
+import vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope;
+import vn.edu.hcmus.securechat.common.protocol.dto.OneTimePreKey;
+import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyBundle;
+import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyRequest;
+import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 
 /**
- * E2EE Crypto Service — kết nối Chat Server thực sự, thực hiện handshake Kerberos ST.
- * Sau handshake thành công, giữ socket mở để gửi/nhận tin nhắn.
+ * Client-side secure session service.
+ *
+ * The Kerberos ST authenticates access to Chat Server. Message content is then
+ * protected by client-to-client Pre-Key + ECDHE + ML-KEM + Double Ratchet.
  */
 public class E2eeCryptoService {
     private static final Logger log = LoggerFactory.getLogger(E2eeCryptoService.class);
 
+    private static final int OPK_POOL_SIZE = 12;
+    private static final long PREKEY_TIMEOUT_SECONDS = 8;
+    private static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
+    private static final byte[] PREKEY_STORE_AAD =
+            "SecureChat-client-prekey-store-v1".getBytes(StandardCharsets.UTF_8);
+
+    public enum ActivityTone {
+        INFO, SUCCESS, ERROR
+    }
+
+    @FunctionalInterface
+    public interface ActivitySink {
+        void onActivity(String title, String body, ActivityTone tone);
+    }
+
+    private final SecureRandom secureRandom = new SecureRandom();
+    private final Object writeLock = new Object();
+    private final AtomicInteger preKeyIdSequence = new AtomicInteger(secureRandom.nextInt(10_000) + 1);
+    private final Map<String, DoubleRatchetSession> ratchetSessions = new ConcurrentHashMap<>();
+    private final Map<String, DoubleRatchetSession> sessionsByConversation = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<PreKeyBundle>> pendingPreKeyRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, PreKeyMaterial> oneTimePreKeyPrivate = new ConcurrentHashMap<>();
+
+    private volatile ActivitySink activitySink = (title, body, tone) -> { };
+
     private byte[] masterSessionKey;
     private Socket chatSocket;
+    private String currentUsername;
+    private String identityCertBase64;
+    private int signedPreKeyId;
+    private KeyPair signedPreKeyEcdh;
+    private KeyPair signedPreKeyKyber;
+    private String signedPreKeyEcdhPub;
+    private String signedPreKeyKyberPub;
+    private DilithiumSignatureService.DilithiumKeyPair dilithiumKeyPair;
+    private String dilithiumPublicKeyBase64;
+    private PreKeyBundle localPreKeyBundle;
+    private Path preKeyStoreFile;
+    private byte[] preKeyStoreKey;
+
+    public void setActivitySink(ActivitySink activitySink) {
+        this.activitySink = activitySink == null ? (title, body, tone) -> { } : activitySink;
+    }
 
     /**
-     * Kết nối đến Chat Server và xác thực bằng ST (Service Ticket).
-     * @param username tên đăng nhập
-     * @param password mật khẩu (để đọc ST từ cache)
-     * @return true nếu handshake thành công
+     * Kết nối Chat Server và xác thực bằng ST. Sau đó upload Pre-Key Bundle để
+     * peer có thể thiết lập E2EE v2 mà server không biết khóa nội dung.
      */
     public void performHandshake(String username, char[] password) throws Exception {
+        fire("Kết nối Chat Server", "Mở socket tới " + ServerConfig.CHAT_HOST + ":" + ServerConfig.CHAT_PORT
+                + " và chuẩn bị ST authenticator.", ActivityTone.INFO);
         log.info("Kết nối đến Chat Server {}:{}", ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
+
         byte[] stCacheData = null;
         byte[] sessionKey = null;
         byte[] authBytes = null;
         byte[] encryptedAuth = null;
         try {
-            // 1. Đọc ST từ TicketCache
             stCacheData = vn.edu.hcmus.securechat.client.kerberos.TicketCache
                     .getTicket(username, "ST_" + ServerConfig.CHAT_HOST, password);
             if (stCacheData == null) {
-                throw new Exception("Không tìm thấy ST trong cache. Vui lòng đảm bảo bạn đã đăng nhập và không bị timeout.");
+                throw new Exception("Không tìm thấy ST trong cache. Vui lòng đăng nhập lại.");
             }
-            // Format: stBase64|||sessionKeyBase64
+
             String cacheStr = new String(stCacheData, StandardCharsets.UTF_8);
             String[] parts = cacheStr.split("\\|\\|\\|");
-            if (parts.length != 2) {
+            if (parts.length < 2) {
                 throw new Exception("Định dạng dữ liệu ST cache không hợp lệ.");
             }
             String stBase64 = parts[0];
             sessionKey = Base64.getDecoder().decode(parts[1]);
+            String stId = parts.length >= 3 ? parts[2] : "";
 
-            // 2. Tạo Authenticator mã hóa bằng K_A_Chat
             String nonce = randomNonceBase64();
             long timestamp = Instant.now().getEpochSecond();
-            AuthenticatorJson auth = new AuthenticatorJson(username, timestamp, nonce);
+            AuthenticatorJson auth = new AuthenticatorJson(
+                    username,
+                    timestamp,
+                    nonce,
+                    stId,
+                    ServerConfig.CHAT_HOST,
+                    1L,
+                    "");
             authBytes = JsonSerializer.toBytes(auth);
             encryptedAuth = AesGcmCipher.encrypt(sessionKey, authBytes);
             String authenticatorB64 = Base64.getEncoder().encodeToString(encryptedAuth);
 
-            // ChatServer hiện hỗ trợ fallback: nếu ECDHE/Kyber chưa được cấp public key
-            // ở bước server-hello, K_A_Chat từ ST được dùng làm session key chung.
+            this.currentUsername = username;
             this.masterSessionKey = Arrays.copyOf(sessionKey, sessionKey.length);
             ChatHandshakeRequest payload = new ChatHandshakeRequest(
                     stBase64, authenticatorB64, null, null, null);
@@ -74,10 +161,10 @@ public class E2eeCryptoService {
             chatSocket = new Socket(ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
             chatSocket.setSoTimeout(ServerConfig.READ_TIMEOUT_MS);
 
-            byte[] payloadBytes = JsonSerializer.toBytes(payload);
-            PacketFrame.write(chatSocket.getOutputStream(), PacketFrame.TYPE_CHAT_HANDSHAKE, payloadBytes);
+            PacketFrame.write(chatSocket.getOutputStream(),
+                    PacketFrame.TYPE_CHAT_HANDSHAKE,
+                    JsonSerializer.toBytes(payload));
 
-            // 6. Đọc response
             PacketFrame response = PacketFrame.read(chatSocket.getInputStream());
             if (response.getType() == PacketFrame.TYPE_ERROR) {
                 String err = new String(response.getPayload(), StandardCharsets.UTF_8);
@@ -89,40 +176,918 @@ public class E2eeCryptoService {
                 throw new Exception("Chat Server trả về response không hợp lệ.");
             }
 
-            // Tắt timeout cho long-lived socket
-            chatSocket.setSoTimeout(0);
-            log.info("Chat Server handshake thành công cho user={}", username);
+            ChatHandshakeResponse handshake = JsonSerializer.fromBytes(
+                    response.getPayload(), ChatHandshakeResponse.class);
+            if (!"OK".equalsIgnoreCase(handshake.getStatus())) {
+                throw new Exception("Chat Server không xác nhận phiên truy cập.");
+            }
+            fire("ST được chấp nhận", "Chat Server đã xác thực vé dịch vụ, Control Vector và authenticator.",
+                    ActivityTone.SUCCESS);
 
+            chatSocket.setSoTimeout(0);
+            uploadLocalPreKeyBundle(username, password);
+            log.info("Chat Server handshake thành công cho user={}", username);
         } catch (Exception e) {
+            fire("Handshake thất bại", e.getMessage(), ActivityTone.ERROR);
             log.error("E2EE Handshake thất bại", e);
             throw new Exception("Handshake đến Chat Server thất bại: " + e.getMessage(), e);
         } finally {
-            if (stCacheData != null) Arrays.fill(stCacheData, (byte) 0);
-            if (sessionKey != null) Arrays.fill(sessionKey, (byte) 0);
-            if (authBytes != null) Arrays.fill(authBytes, (byte) 0);
-            if (encryptedAuth != null) Arrays.fill(encryptedAuth, (byte) 0);
+            zero(stCacheData);
+            zero(sessionKey);
+            zero(authBytes);
+            zero(encryptedAuth);
         }
+    }
+
+    public EncryptedChatEnvelope encryptForPeer(String peerId, String content) throws Exception {
+        DoubleRatchetSession session = ratchetSessions.get(peerId);
+        if (session == null) {
+            synchronized (ratchetSessions) {
+                session = ratchetSessions.get(peerId);
+                if (session == null) {
+                    session = establishOutboundSession(peerId);
+                }
+            }
+        }
+
+        EncryptedChatEnvelope env = session.encrypt(content);
+        saveSessions();
+        return env;
+    }
+
+    public ChatMessage decryptIncoming(EncryptedChatEnvelope envelope) throws Exception {
+        if (isE2eeV2Envelope(envelope)) {
+            DoubleRatchetSession session = sessionsByConversation.get(envelope.getConversationId());
+            if (session == null) {
+                session = ratchetSessions.get(envelope.getSenderId());
+            }
+            if (session == null) {
+                throw new ProtocolException("Chưa có Double Ratchet session với " + envelope.getSenderId());
+            }
+            ChatMessage msg = session.decrypt(envelope);
+            saveSessions();
+            return msg;
+        }
+
+        byte[] encrypted = Base64.getDecoder().decode(envelope.getPayload());
+        byte[] plain = AesGcmCipher.decrypt(masterSessionKey, encrypted);
+        try {
+            return JsonSerializer.fromBytes(plain, ChatMessage.class);
+        } finally {
+            zero(encrypted);
+            zero(plain);
+        }
+    }
+
+    public void acceptPreKeyBundle(PreKeyBundle bundle) {
+        if (bundle == null || isBlank(bundle.getOwnerId())) {
+            return;
+        }
+        CompletableFuture<PreKeyBundle> future = pendingPreKeyRequests.remove(bundle.getOwnerId());
+        if (future != null) {
+            future.complete(bundle);
+        }
+        int opk = bundle.getOneTimePreKeys() == null ? 0 : bundle.getOneTimePreKeys().size();
+        fire("Nhận Pre-Key Bundle", "Đã nhận bundle của @" + bundle.getOwnerId()
+                + " với " + opk + " one-time pre-key.", ActivityTone.INFO);
+    }
+
+    public void acceptE2eeInit(E2eeInitMessage init) throws Exception {
+        validateIncomingInit(init);
+        if (sessionsByConversation.containsKey(init.getConversationId())) {
+            return;
+        }
+
+        PreKeyMaterial material = selectLocalPreKey(init.getUsedOneTimePreKeyId());
+        byte[] ssEcdhe = null;
+        byte[] ssKyber = null;
+        byte[] conversationKey = null;
+        byte[] salt = null;
+        byte[] kyberCiphertext = null;
+        try {
+            String transcript = buildInitTranscript(init, material.ecdhPubKey(), material.kyberPubKey());
+            verifyTranscriptHash(init, transcript);
+            verifySignatureFromCertificate(init.getSenderCertEcdsa(), transcript, init.getSignatureEcdsa());
+            if (!isBlank(init.getSenderCertDilithium()) && !isBlank(init.getSignatureDilithium())) {
+                verifyDilithiumSignature(init.getSenderCertDilithium(), transcript, init.getSignatureDilithium());
+            }
+
+            PublicKey senderEcdhPub = EcdheService.decodePublicKey(init.getEphemeralEcdhPubKey());
+            ssEcdhe = EcdheService.computeSharedSecret(material.ecdhPair().getPrivate(), senderEcdhPub);
+            kyberCiphertext = Base64.getDecoder().decode(init.getKyberCiphertext());
+            ssKyber = KyberKemService.decapsulate(
+                    material.kyberPair().getPrivate(),
+                    kyberCiphertext);
+            salt = conversationSalt(init.getConversationId(), init.getNonce());
+            conversationKey = HkdfKeyDerivation.deriveConversationKey(ssEcdhe, ssKyber, salt);
+
+            DoubleRatchetSession session = new DoubleRatchetSession(
+                    init.getConversationId(),
+                    currentUsername,
+                    init.getSenderId(),
+                    conversationKey,
+                    false);
+            sessionsByConversation.put(init.getConversationId(), session);
+            ratchetSessions.putIfAbsent(init.getSenderId(), session);
+            saveSessions();
+
+            if (init.getUsedOneTimePreKeyId() != null
+                    && oneTimePreKeyPrivate.remove(init.getUsedOneTimePreKeyId()) != null) {
+                fire("OPK đã tiêu thụ", "One-time pre-key #" + init.getUsedOneTimePreKeyId()
+                        + " được dùng đúng một lần cho @" + init.getSenderId() + ".", ActivityTone.SUCCESS);
+                savePreKeyStoreQuietly();
+            }
+            fire("E2EE Init hợp lệ", "Đã xác minh transcript, giải ML-KEM và mở Double Ratchet với @"
+                    + init.getSenderId() + ".", ActivityTone.SUCCESS);
+        } finally {
+            zero(ssEcdhe);
+            zero(ssKyber);
+            zero(conversationKey);
+            zero(salt);
+            zero(kyberCiphertext);
+        }
+    }
+
+    public void handleServerError(String message) {
+        ProtocolException error = new ProtocolException(message == null ? "Chat Server error" : message);
+        for (Map.Entry<String, CompletableFuture<PreKeyBundle>> entry : pendingPreKeyRequests.entrySet()) {
+            entry.getValue().completeExceptionally(error);
+        }
+        pendingPreKeyRequests.clear();
+        fire("Server báo lỗi", message == null ? "Yêu cầu hiện tại bị từ chối." : message, ActivityTone.ERROR);
     }
 
     public byte[] getMasterSessionKey() {
         return masterSessionKey;
     }
 
-    /** Socket đến Chat Server — giữ mở để gửi/nhận tin nhắn sau handshake. */
     public Socket getChatSocket() {
         return chatSocket;
     }
 
-    /** Đóng kết nối đến Chat Server. */
-    public void disconnect() {
-        if (chatSocket != null && !chatSocket.isClosed()) {
-            try { chatSocket.close(); } catch (IOException ignored) {}
+    public void sendFrame(byte type, byte[] payload) throws IOException {
+        Socket socket = chatSocket;
+        if (socket == null || socket.isClosed()) {
+            throw new IOException("Chat socket is not connected");
         }
+        synchronized (writeLock) {
+            PacketFrame.write(socket.getOutputStream(), type, payload);
+        }
+    }
+
+    public void disconnect() {
+        java.util.Set<DoubleRatchetSession> sessions = new java.util.HashSet<>(ratchetSessions.values());
+        sessions.addAll(sessionsByConversation.values());
+        for (DoubleRatchetSession session : sessions) {
+            session.destroy();
+        }
+        ratchetSessions.clear();
+        sessionsByConversation.clear();
+        oneTimePreKeyPrivate.clear();
+        localPreKeyBundle = null;
+        if (dilithiumKeyPair != null) {
+            dilithiumKeyPair.destroyPrivateKey();
+        }
+        zero(masterSessionKey);
+        zero(preKeyStoreKey);
+        preKeyStoreKey = null;
+        if (chatSocket != null && !chatSocket.isClosed()) {
+            try {
+                chatSocket.close();
+            } catch (IOException ignored) {
+                // Nothing to do during UI logout.
+            }
+        }
+    }
+
+    private void uploadLocalPreKeyBundle(String username, char[] password) throws Exception {
+        X509Certificate cert = PkiManager.getCertificate();
+        if (cert == null || PkiManager.getPrivateKey() == null) {
+            throw new ProtocolException("Chưa tải identity certificate để ký Pre-Key Bundle.");
+        }
+
+        this.identityCertBase64 = Base64.getEncoder().encodeToString(cert.getEncoded());
+        initializePreKeyStore(username, password);
+        boolean restoredStore = tryLoadPreKeyStore();
+        loadSessions();
+        if (restoredStore) {
+            sendFrame(PacketFrame.TYPE_PREKEY_UPLOAD, JsonSerializer.toBytes(localPreKeyBundle));
+            int opkCount = localPreKeyBundle.getOneTimePreKeys() == null
+                    ? 0 : localPreKeyBundle.getOneTimePreKeys().size();
+            fire("Tải Pre-Key cục bộ", "Đã khôi phục signed pre-key và " + opkCount
+                    + " one-time pre-key để nhận tin offline.", ActivityTone.SUCCESS);
+            return;
+        }
+
+        oneTimePreKeyPrivate.clear();
+        this.signedPreKeyId = preKeyIdSequence.getAndIncrement();
+        this.signedPreKeyEcdh = EcdheService.generateKeyPair();
+        this.signedPreKeyKyber = KyberKemService.generateKeyPair();
+        this.signedPreKeyEcdhPub = EcdheService.encodePublicKey(signedPreKeyEcdh.getPublic());
+        this.signedPreKeyKyberPub = KyberKemService.encodePublicKey(signedPreKeyKyber.getPublic());
+        this.dilithiumKeyPair = DilithiumSignatureService.generateKeyPair();
+        this.dilithiumPublicKeyBase64 = dilithiumKeyPair.publicKeyBase64();
+
+        List<OneTimePreKey> opks = new ArrayList<>();
+        for (int i = 0; i < OPK_POOL_SIZE; i++) {
+            int id = preKeyIdSequence.getAndIncrement();
+            KeyPair opkEcdh = EcdheService.generateKeyPair();
+            KeyPair opkKyber = KyberKemService.generateKeyPair();
+            String ecdhPub = EcdheService.encodePublicKey(opkEcdh.getPublic());
+            String kyberPub = KyberKemService.encodePublicKey(opkKyber.getPublic());
+            oneTimePreKeyPrivate.put(id, new PreKeyMaterial(id, opkEcdh, opkKyber, ecdhPub, kyberPub));
+            opks.add(new OneTimePreKey(id, ecdhPub, kyberPub));
+        }
+
+        PreKeyBundle bundle = new PreKeyBundle();
+        bundle.setOwnerId(username);
+        bundle.setIdentityCertEcdsa(identityCertBase64);
+        bundle.setIdentityCertDilithium(dilithiumPublicKeyBase64);
+        bundle.setSignedPreKeyId(signedPreKeyId);
+        bundle.setSignedPreKeyEcdh(signedPreKeyEcdhPub);
+        bundle.setSignedPreKeyKyber(signedPreKeyKyberPub);
+        bundle.setOneTimePreKeys(opks);
+        bundle.setBundleTimestamp(Instant.now().getEpochSecond());
+        bundle.setSignedPreKeySignatureEcdsa(signText(signedPreKeyTranscript(bundle)));
+        bundle.setSignedPreKeySignatureDilithium(signDilithium(signedPreKeyTranscript(bundle)));
+        bundle.setBundleSignatureEcdsa(signText(bundleTranscript(bundle)));
+        bundle.setBundleSignatureDilithium(signDilithium(bundleTranscript(bundle)));
+        bundle.setLastResort(false);
+        localPreKeyBundle = bundle;
+        savePreKeyStore();
+
+        sendFrame(PacketFrame.TYPE_PREKEY_UPLOAD, JsonSerializer.toBytes(bundle));
+        fire("Upload Pre-Key Bundle", "Đã công bố signed pre-key và " + OPK_POOL_SIZE
+                + " one-time pre-key kèm chữ ký RSA + Dilithium.", ActivityTone.SUCCESS);
+    }
+
+    private void initializePreKeyStore(String username, char[] password) throws Exception {
+        ClientStoragePaths.ensureUserDir(username);
+        preKeyStoreFile = ClientStoragePaths.preKeyStoreFile(username);
+        byte[] salt = loadOrCreatePreKeyStoreSalt(username);
+        try {
+            zero(preKeyStoreKey);
+            preKeyStoreKey = Argon2idKeyDerivation.deriveDbKey(password, salt);
+        } finally {
+            zero(salt);
+        }
+    }
+
+    private byte[] loadOrCreatePreKeyStoreSalt(String username) throws IOException {
+        Path saltFile = ClientStoragePaths.preKeyStoreSaltFile(username);
+        if (Files.exists(saltFile) && Files.size(saltFile) >= CryptoConstants.ARGON2ID_SALT_SIZE) {
+            byte[] fileBytes = Files.readAllBytes(saltFile);
+            if (fileBytes.length >= CryptoConstants.ARGON2ID_SALT_SIZE) {
+                return Arrays.copyOf(fileBytes, CryptoConstants.ARGON2ID_SALT_SIZE);
+            }
+        }
+
+        byte[] salt = new byte[CryptoConstants.ARGON2ID_SALT_SIZE];
+        secureRandom.nextBytes(salt);
+        Files.write(saltFile, salt);
+        return salt;
+    }
+
+    private boolean tryLoadPreKeyStore() {
+        if (preKeyStoreFile == null || preKeyStoreKey == null || !Files.isRegularFile(preKeyStoreFile)) {
+            return false;
+        }
+
+        byte[] encrypted = null;
+        byte[] json = null;
+        try {
+            encrypted = Files.readAllBytes(preKeyStoreFile);
+            if (encrypted.length == 0) {
+                return false;
+            }
+            json = AesGcmCipher.decrypt(preKeyStoreKey, encrypted, PREKEY_STORE_AAD);
+            PersistedPreKeyStore store = JsonSerializer.fromBytes(json, PersistedPreKeyStore.class);
+            if (!Objects.equals(identityCertBase64, store.identityCertBase64)) {
+                fire("Pre-Key cần xoay mới", "Identity certificate đã đổi nên client sẽ sinh bundle mới.",
+                        ActivityTone.INFO);
+                return false;
+            }
+            applyPreKeyStore(store);
+            return localPreKeyBundle != null && signedPreKeyEcdh != null && signedPreKeyKyber != null;
+        } catch (Exception e) {
+            log.warn("Could not load persisted pre-key store", e);
+            fire("Không đọc được Pre-Key cũ", "Client sẽ sinh bundle mới; tin offline cũ có thể không mở được.",
+                    ActivityTone.ERROR);
+            return false;
+        } finally {
+            zero(encrypted);
+            zero(json);
+        }
+    }
+
+    private void applyPreKeyStore(PersistedPreKeyStore store) throws Exception {
+        if (store == null || store.bundle == null) {
+            throw new ProtocolException("Pre-Key store rỗng.");
+        }
+        signedPreKeyId = store.signedPreKeyId;
+        signedPreKeyEcdhPub = store.signedPreKeyEcdhPub;
+        signedPreKeyKyberPub = store.signedPreKeyKyberPub;
+        signedPreKeyEcdh = decodeEcdhKeyPair(store.signedPreKeyEcdhPub, store.signedPreKeyEcdhPrivate);
+        signedPreKeyKyber = decodeKyberKeyPair(store.signedPreKeyKyberPub, store.signedPreKeyKyberPrivate);
+        dilithiumPublicKeyBase64 = store.dilithiumPublicKeyBase64;
+        byte[] dilithiumPublic = Base64.getDecoder().decode(store.dilithiumPublicKeyBase64);
+        byte[] dilithiumPrivate = Base64.getDecoder().decode(store.dilithiumPrivateKeyBase64);
+        dilithiumKeyPair = new DilithiumSignatureService.DilithiumKeyPair(dilithiumPublic, dilithiumPrivate);
+
+        oneTimePreKeyPrivate.clear();
+        int maxId = signedPreKeyId;
+        if (store.oneTimePreKeys != null) {
+            for (PersistedOneTimePreKey item : store.oneTimePreKeys) {
+                if (item == null || item.id <= 0) {
+                    continue;
+                }
+                KeyPair ecdh = decodeEcdhKeyPair(item.ecdhPubKey, item.ecdhPrivate);
+                KeyPair kyber = decodeKyberKeyPair(item.kyberPubKey, item.kyberPrivate);
+                oneTimePreKeyPrivate.put(item.id,
+                        new PreKeyMaterial(item.id, ecdh, kyber, item.ecdhPubKey, item.kyberPubKey));
+                maxId = Math.max(maxId, item.id);
+            }
+        }
+        localPreKeyBundle = store.bundle;
+        syncLocalPreKeyBundle();
+        preKeyIdSequence.set(Math.max(store.nextPreKeyId, maxId + 1));
+    }
+
+    private void savePreKeyStore() throws Exception {
+        if (preKeyStoreFile == null || preKeyStoreKey == null || localPreKeyBundle == null) {
+            return;
+        }
+        syncLocalPreKeyBundle();
+
+        PersistedPreKeyStore store = new PersistedPreKeyStore();
+        store.nextPreKeyId = preKeyIdSequence.get();
+        store.identityCertBase64 = identityCertBase64;
+        store.signedPreKeyId = signedPreKeyId;
+        store.signedPreKeyEcdhPub = signedPreKeyEcdhPub;
+        store.signedPreKeyEcdhPrivate = encodePrivateKey(signedPreKeyEcdh.getPrivate());
+        store.signedPreKeyKyberPub = signedPreKeyKyberPub;
+        store.signedPreKeyKyberPrivate = encodePrivateKey(signedPreKeyKyber.getPrivate());
+        store.dilithiumPublicKeyBase64 = dilithiumPublicKeyBase64;
+        store.dilithiumPrivateKeyBase64 = dilithiumKeyPair.privateKeyBase64();
+        store.bundle = localPreKeyBundle;
+        store.oneTimePreKeys = oneTimePreKeyPrivate.values().stream()
+                .sorted(Comparator.comparingInt(PreKeyMaterial::id))
+                .map(material -> {
+                    PersistedOneTimePreKey item = new PersistedOneTimePreKey();
+                    item.id = material.id();
+                    item.ecdhPubKey = material.ecdhPubKey();
+                    item.ecdhPrivate = encodePrivateKey(material.ecdhPair().getPrivate());
+                    item.kyberPubKey = material.kyberPubKey();
+                    item.kyberPrivate = encodePrivateKey(material.kyberPair().getPrivate());
+                    return item;
+                })
+                .toList();
+
+        byte[] json = null;
+        byte[] encrypted = null;
+        try {
+            json = JsonSerializer.toBytes(store);
+            encrypted = AesGcmCipher.encrypt(preKeyStoreKey, json, PREKEY_STORE_AAD);
+            Files.write(preKeyStoreFile, encrypted);
+        } finally {
+            zero(json);
+            zero(encrypted);
+        }
+    }
+
+    private void savePreKeyStoreQuietly() {
+        try {
+            savePreKeyStore();
+        } catch (Exception e) {
+            log.warn("Could not persist pre-key store", e);
+            fire("Không lưu được Pre-Key", "OPK đã dùng chưa được ghi lại vào kho cục bộ.",
+                    ActivityTone.ERROR);
+        }
+    }
+
+    private void syncLocalPreKeyBundle() {
+        if (localPreKeyBundle == null) {
+            return;
+        }
+        List<OneTimePreKey> opks = oneTimePreKeyPrivate.values().stream()
+                .sorted(Comparator.comparingInt(PreKeyMaterial::id))
+                .map(material -> new OneTimePreKey(material.id(), material.ecdhPubKey(), material.kyberPubKey()))
+                .toList();
+        localPreKeyBundle.setOneTimePreKeys(opks);
+    }
+
+    private DoubleRatchetSession establishOutboundSession(String peerId) throws Exception {
+        fire("Xin Pre-Key Bundle", "Yêu cầu Chat Server phát bundle của @" + peerId
+                + "; server chỉ chuyển tiếp khóa công khai.", ActivityTone.INFO);
+        PreKeyBundle bundle = requestPeerPreKeyBundle(peerId);
+        verifyBundle(bundle);
+
+        SelectedPreKey selected = selectRemotePreKey(bundle);
+        KeyPair localEcdh = EcdheService.generateKeyPair();
+        KyberKemService.EncapsulationResult kyber = null;
+        byte[] ssEcdhe = null;
+        byte[] conversationKey = null;
+        byte[] salt = null;
+        try {
+            PublicKey remoteEcdh = EcdheService.decodePublicKey(selected.ecdhPubKey());
+            PublicKey remoteKyber = KyberKemService.decodePublicKey(selected.kyberPubKey());
+            ssEcdhe = EcdheService.computeSharedSecret(localEcdh.getPrivate(), remoteEcdh);
+            kyber = KyberKemService.encapsulate(remoteKyber);
+
+            String nonce = randomNonceBase64();
+            String conversationId = conversationId(currentUsername, peerId, nonce);
+            salt = conversationSalt(conversationId, nonce);
+            conversationKey = HkdfKeyDerivation.deriveConversationKey(
+                    ssEcdhe, kyber.sharedSecret(), salt);
+
+            E2eeInitMessage init = new E2eeInitMessage();
+            init.setConversationId(conversationId);
+            init.setSenderId(currentUsername);
+            init.setRecipientId(peerId);
+            init.setEphemeralEcdhPubKey(EcdheService.encodePublicKey(localEcdh.getPublic()));
+            init.setKyberCiphertext(Base64.getEncoder().encodeToString(kyber.ciphertext()));
+            init.setNonce(nonce);
+            init.setTimestamp(Instant.now().getEpochSecond());
+            init.setUsedOneTimePreKeyId(selected.id());
+            init.setSenderCertEcdsa(identityCertBase64);
+            init.setSenderCertDilithium(dilithiumPublicKeyBase64);
+
+            String transcript = buildInitTranscript(init, selected.ecdhPubKey(), selected.kyberPubKey());
+            init.setTranscriptHash(Base64.getEncoder().encodeToString(sha256(transcript)));
+            init.setSignatureEcdsa(signText(transcript));
+            init.setSignatureDilithium(signDilithium(transcript));
+
+            DoubleRatchetSession session = new DoubleRatchetSession(
+                    conversationId,
+                    currentUsername,
+                    peerId,
+                    conversationKey,
+                    true);
+            ratchetSessions.put(peerId, session);
+            sessionsByConversation.put(conversationId, session);
+            saveSessions();
+            sendFrame(PacketFrame.TYPE_E2EE_INIT, JsonSerializer.toBytes(init));
+            fire("E2EE Init đã gửi", "Transcript bao phủ ECDHE, ML-KEM ciphertext và pre-key đã chọn cho @"
+                    + peerId + ".", ActivityTone.SUCCESS);
+            return session;
+        } finally {
+            zero(ssEcdhe);
+            if (kyber != null) {
+                zero(kyber.sharedSecret());
+                zero(kyber.ciphertext());
+            }
+            zero(conversationKey);
+            zero(salt);
+        }
+    }
+
+    private PreKeyBundle requestPeerPreKeyBundle(String peerId) throws Exception {
+        CompletableFuture<PreKeyBundle> future = new CompletableFuture<>();
+        CompletableFuture<PreKeyBundle> previous = pendingPreKeyRequests.put(peerId, future);
+        if (previous != null) {
+            previous.completeExceptionally(new ProtocolException("Pre-Key request superseded"));
+        }
+
+        sendFrame(PacketFrame.TYPE_PREKEY_REQUEST,
+                JsonSerializer.toBytes(new PreKeyRequest(peerId)));
+        try {
+            return future.get(PREKEY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            pendingPreKeyRequests.remove(peerId);
+            throw new ProtocolException("Hết thời gian chờ Pre-Key Bundle của @" + peerId, e);
+        }
+    }
+
+    private void verifyBundle(PreKeyBundle bundle) throws Exception {
+        if (bundle == null || isBlank(bundle.getOwnerId())) {
+            throw new ProtocolException("Pre-Key Bundle rỗng.");
+        }
+        if (isBlank(bundle.getIdentityCertEcdsa())
+                || isBlank(bundle.getSignedPreKeyEcdh())
+                || isBlank(bundle.getSignedPreKeyKyber())) {
+            throw new ProtocolException("Pre-Key Bundle thiếu khóa bắt buộc.");
+        }
+
+        if (!isBlank(bundle.getBundleSignatureEcdsa())) {
+            verifySignatureFromCertificate(
+                    bundle.getIdentityCertEcdsa(),
+                    bundleTranscript(bundle),
+                    bundle.getBundleSignatureEcdsa());
+        }
+        if (!isBlank(bundle.getIdentityCertDilithium()) && !isBlank(bundle.getBundleSignatureDilithium())) {
+            verifyDilithiumSignature(
+                    bundle.getIdentityCertDilithium(),
+                    bundleTranscript(bundle),
+                    bundle.getBundleSignatureDilithium());
+        }
+        if (!isBlank(bundle.getSignedPreKeySignatureEcdsa())) {
+            verifySignatureFromCertificate(
+                    bundle.getIdentityCertEcdsa(),
+                    signedPreKeyTranscript(bundle),
+                    bundle.getSignedPreKeySignatureEcdsa());
+        }
+        if (!isBlank(bundle.getIdentityCertDilithium()) && !isBlank(bundle.getSignedPreKeySignatureDilithium())) {
+            verifyDilithiumSignature(
+                    bundle.getIdentityCertDilithium(),
+                    signedPreKeyTranscript(bundle),
+                    bundle.getSignedPreKeySignatureDilithium());
+        }
+        fire("Xác minh Pre-Key", "Chữ ký X.509 và Dilithium của bundle @" + bundle.getOwnerId()
+                + " hợp lệ; server không được xem là nguồn tin cậy cuối.", ActivityTone.SUCCESS);
+    }
+
+    private SelectedPreKey selectRemotePreKey(PreKeyBundle bundle) {
+        if (bundle.getOneTimePreKeys() != null && !bundle.getOneTimePreKeys().isEmpty()) {
+            OneTimePreKey opk = bundle.getOneTimePreKeys().get(0);
+            return new SelectedPreKey(opk.getId(), opk.getEcdhPubKey(), opk.getKyberPubKey());
+        }
+        return new SelectedPreKey(bundle.getSignedPreKeyId(),
+                bundle.getSignedPreKeyEcdh(),
+                bundle.getSignedPreKeyKyber());
+    }
+
+    private PreKeyMaterial selectLocalPreKey(Integer usedOneTimePreKeyId) throws ProtocolException {
+        if (usedOneTimePreKeyId != null) {
+            PreKeyMaterial material = oneTimePreKeyPrivate.get(usedOneTimePreKeyId);
+            if (material != null) {
+                return material;
+            }
+            if (usedOneTimePreKeyId == signedPreKeyId) {
+                return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyKyber,
+                        signedPreKeyEcdhPub, signedPreKeyKyberPub);
+            }
+            throw new ProtocolException("One-time pre-key #" + usedOneTimePreKeyId + " không còn khả dụng.");
+        }
+        if (signedPreKeyEcdh != null && signedPreKeyKyber != null) {
+            return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyKyber,
+                    signedPreKeyEcdhPub, signedPreKeyKyberPub);
+        }
+        throw new ProtocolException("Không tìm thấy private pre-key để mở E2EE init.");
+    }
+
+    private void validateIncomingInit(E2eeInitMessage init) throws ProtocolException {
+        if (init == null
+                || isBlank(init.getConversationId())
+                || isBlank(init.getSenderId())
+                || isBlank(init.getRecipientId())
+                || isBlank(init.getEphemeralEcdhPubKey())
+                || isBlank(init.getKyberCiphertext())
+                || isBlank(init.getNonce())
+                || isBlank(init.getTranscriptHash())
+                || isBlank(init.getSignatureEcdsa())) {
+            throw new ProtocolException("E2EE init thiếu trường bắt buộc.");
+        }
+        if (!Objects.equals(currentUsername, init.getRecipientId())) {
+            throw new ProtocolException("E2EE init không dành cho client hiện tại.");
+        }
+    }
+
+    private void verifyTranscriptHash(E2eeInitMessage init, String transcript) throws Exception {
+        byte[] expected = sha256(transcript);
+        byte[] actual = Base64.getDecoder().decode(init.getTranscriptHash());
+        try {
+            if (!MessageDigest.isEqual(expected, actual)) {
+                throw new ProtocolException("Transcript hash mismatch.");
+            }
+        } finally {
+            zero(expected);
+            zero(actual);
+        }
+    }
+
+    private String bundleTranscript(PreKeyBundle bundle) {
+        return String.join("|",
+                "SecureChat-PreKeyBundle-v2",
+                safe(bundle.getOwnerId()),
+                safe(bundle.getIdentityCertEcdsa()),
+                String.valueOf(bundle.getSignedPreKeyId()),
+                safe(bundle.getSignedPreKeyEcdh()),
+                safe(bundle.getSignedPreKeyKyber()),
+                String.valueOf(bundle.getBundleTimestamp()));
+    }
+
+    private String signedPreKeyTranscript(PreKeyBundle bundle) {
+        return String.join("|",
+                "SecureChat-SignedPreKey-v2",
+                safe(bundle.getOwnerId()),
+                String.valueOf(bundle.getSignedPreKeyId()),
+                safe(bundle.getSignedPreKeyEcdh()),
+                safe(bundle.getSignedPreKeyKyber()),
+                String.valueOf(bundle.getBundleTimestamp()));
+    }
+
+    private String buildInitTranscript(E2eeInitMessage init, String selectedEcdhPubKey, String selectedKyberPubKey) {
+        return String.join("|",
+                "SecureChat-E2EE-Init-v2",
+                safe(init.getConversationId()),
+                safe(init.getSenderId()),
+                safe(init.getRecipientId()),
+                safe(init.getEphemeralEcdhPubKey()),
+                safe(init.getKyberCiphertext()),
+                safe(init.getNonce()),
+                String.valueOf(init.getTimestamp()),
+                String.valueOf(init.getUsedOneTimePreKeyId()),
+                safe(selectedEcdhPubKey),
+                safe(selectedKyberPubKey));
+    }
+
+    private String signText(String text) throws Exception {
+        Signature signature = Signature.getInstance(SIGNATURE_ALGORITHM);
+        signature.initSign(PkiManager.getPrivateKey());
+        signature.update(text.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(signature.sign());
+    }
+
+    private String signDilithium(String text) throws CryptoException {
+        if (dilithiumKeyPair == null) {
+            return null;
+        }
+        byte[] signature = DilithiumSignatureService.sign(
+                dilithiumKeyPair.privateKey(),
+                dilithiumKeyPair.publicKey(),
+                text.getBytes(StandardCharsets.UTF_8));
+        try {
+            return Base64.getEncoder().encodeToString(signature);
+        } finally {
+            zero(signature);
+        }
+    }
+
+    private void verifySignatureFromCertificate(String certificateBase64, String text, String signatureBase64)
+            throws Exception {
+        X509Certificate cert = decodeCertificate(certificateBase64);
+        cert.checkValidity();
+        Signature signature = Signature.getInstance(SIGNATURE_ALGORITHM);
+        signature.initVerify(cert.getPublicKey());
+        signature.update(text.getBytes(StandardCharsets.UTF_8));
+        byte[] signatureBytes = Base64.getDecoder().decode(signatureBase64);
+        try {
+            if (!signature.verify(signatureBytes)) {
+                throw new ProtocolException("Chữ ký transcript hoặc Pre-Key Bundle không hợp lệ.");
+            }
+        } finally {
+            zero(signatureBytes);
+        }
+    }
+
+    private void verifyDilithiumSignature(String publicKeyBase64, String text, String signatureBase64)
+            throws CryptoException, ProtocolException {
+        byte[] publicKey = Base64.getDecoder().decode(publicKeyBase64);
+        byte[] signature = Base64.getDecoder().decode(signatureBase64);
+        try {
+            boolean ok = DilithiumSignatureService.verify(
+                    publicKey,
+                    text.getBytes(StandardCharsets.UTF_8),
+                    signature);
+            if (!ok) {
+                throw new ProtocolException("Chữ ký Dilithium không hợp lệ.");
+            }
+        } finally {
+            zero(publicKey);
+            zero(signature);
+        }
+    }
+
+    private static KeyPair decodeEcdhKeyPair(String publicKeyBase64, String privateKeyBase64)
+            throws CryptoException {
+        return new KeyPair(
+                EcdheService.decodePublicKey(publicKeyBase64),
+                decodePrivateKey("EC", privateKeyBase64));
+    }
+
+    private static KeyPair decodeKyberKeyPair(String publicKeyBase64, String privateKeyBase64)
+            throws CryptoException {
+        return new KeyPair(
+                KyberKemService.decodePublicKey(publicKeyBase64),
+                decodePrivateKey("ML-KEM", privateKeyBase64));
+    }
+
+    private static PrivateKey decodePrivateKey(String algorithm, String privateKeyBase64)
+            throws CryptoException {
+        byte[] keyBytes = null;
+        try {
+            keyBytes = Base64.getDecoder().decode(privateKeyBase64);
+            return KeyFactory.getInstance(algorithm).generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
+        } catch (Exception e) {
+            throw new CryptoException("Failed to decode private key for " + algorithm, e);
+        } finally {
+            zero(keyBytes);
+        }
+    }
+
+    private static String encodePrivateKey(PrivateKey privateKey) {
+        byte[] encoded = privateKey == null ? null : privateKey.getEncoded();
+        if (encoded == null || encoded.length == 0) {
+            throw new IllegalStateException("Private key is not encodable");
+        }
+        return Base64.getEncoder().encodeToString(encoded);
+    }
+
+    private static X509Certificate decodeCertificate(String certificateBase64) throws Exception {
+        byte[] certBytes = Base64.getDecoder().decode(certificateBase64);
+        try {
+            CertificateFactory factory = CertificateFactory.getInstance("X.509");
+            return (X509Certificate) factory.generateCertificate(new ByteArrayInputStream(certBytes));
+        } finally {
+            zero(certBytes);
+        }
+    }
+
+    private String conversationId(String sender, String recipient, String nonce) throws CryptoException {
+        byte[] digest = sha256(sender + "|" + recipient + "|" + nonce + "|" + Instant.now().toEpochMilli());
+        try {
+            return "conv-" + Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(Arrays.copyOf(digest, 18));
+        } finally {
+            zero(digest);
+        }
+    }
+
+    private static byte[] conversationSalt(String conversationId, String nonce) throws CryptoException {
+        return sha256(nonce + "|" + conversationId);
+    }
+
+    private static boolean isE2eeV2Envelope(EncryptedChatEnvelope envelope) {
+        return envelope != null
+                && !isBlank(envelope.getConversationId())
+                && !isBlank(envelope.getSenderId())
+                && !isBlank(envelope.getAadHash())
+                && envelope.getMsgId() > 0;
     }
 
     private static String randomNonceBase64() {
         byte[] nonce = new byte[CryptoConstants.NONCE_SIZE_BYTES];
         new SecureRandom().nextBytes(nonce);
         return Base64.getEncoder().encodeToString(nonce);
+    }
+
+    private static byte[] sha256(String text) throws CryptoException {
+        try {
+            return MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new CryptoException("SHA-256 failed", e);
+        }
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private void fire(String title, String body, ActivityTone tone) {
+        activitySink.onActivity(title, body, tone);
+    }
+
+    private static void zero(byte[] data) {
+        if (data != null) {
+            Arrays.fill(data, (byte) 0);
+        }
+    }
+
+    public static class PersistedPreKeyStore {
+        public int nextPreKeyId;
+        public String identityCertBase64;
+        public int signedPreKeyId;
+        public String signedPreKeyEcdhPub;
+        public String signedPreKeyEcdhPrivate;
+        public String signedPreKeyKyberPub;
+        public String signedPreKeyKyberPrivate;
+        public String dilithiumPublicKeyBase64;
+        public String dilithiumPrivateKeyBase64;
+        public PreKeyBundle bundle;
+        public List<PersistedOneTimePreKey> oneTimePreKeys = new ArrayList<>();
+    }
+
+    public static class PersistedOneTimePreKey {
+        public int id;
+        public String ecdhPubKey;
+        public String ecdhPrivate;
+        public String kyberPubKey;
+        public String kyberPrivate;
+    }
+
+    private record SelectedPreKey(Integer id, String ecdhPubKey, String kyberPubKey) { }
+
+    private record PreKeyMaterial(
+            int id,
+            KeyPair ecdhPair,
+            KeyPair kyberPair,
+            String ecdhPubKey,
+            String kyberPubKey) { }
+
+    private void saveSessions() {
+        if (currentUsername == null || preKeyStoreKey == null) {
+            return;
+        }
+        try {
+            PersistedSessions ps = new PersistedSessions();
+            java.util.Set<DoubleRatchetSession> uniqueSessions = new java.util.HashSet<>();
+            uniqueSessions.addAll(ratchetSessions.values());
+            uniqueSessions.addAll(sessionsByConversation.values());
+
+            for (DoubleRatchetSession session : uniqueSessions) {
+                PersistedSession s = new PersistedSession();
+                s.conversationId = session.getConversationId();
+                s.localId = session.getLocalId();
+                s.remoteId = session.getRemoteId();
+                s.sendChainKey = session.getSendChainKey() != null ? Base64.getEncoder().encodeToString(session.getSendChainKey()) : null;
+                s.receiveChainKey = session.getReceiveChainKey() != null ? Base64.getEncoder().encodeToString(session.getReceiveChainKey()) : null;
+                s.nextSendMsgId = session.getNextSendMsgId();
+                s.nextReceiveMsgId = session.getNextReceiveMsgId();
+                if (session.getSkippedMessageKeys() != null) {
+                    for (Map.Entry<Long, DoubleRatchetSession.SkippedKey> entry : session.getSkippedMessageKeys().entrySet()) {
+                        PersistedSkippedKey sk = new PersistedSkippedKey();
+                        sk.msgId = entry.getKey();
+                        sk.key = entry.getValue().key() != null ? Base64.getEncoder().encodeToString(entry.getValue().key()) : null;
+                        sk.createdAtMillis = entry.getValue().createdAtMillis();
+                        s.skippedKeys.add(sk);
+                    }
+                }
+                ps.sessions.add(s);
+            }
+
+            byte[] jsonBytes = JsonSerializer.toBytes(ps);
+            byte[] encrypted = AesGcmCipher.encrypt(preKeyStoreKey, jsonBytes, PREKEY_STORE_AAD);
+            Path sessionFile = ClientStoragePaths.e2eeSessionsFile(currentUsername);
+            Files.write(sessionFile, encrypted);
+        } catch (Exception e) {
+            log.warn("Could not save E2EE Double Ratchet sessions", e);
+        }
+    }
+
+    private void loadSessions() {
+        if (currentUsername == null || preKeyStoreKey == null) {
+            return;
+        }
+        Path sessionFile = ClientStoragePaths.e2eeSessionsFile(currentUsername);
+        if (!Files.isRegularFile(sessionFile)) {
+            return;
+        }
+        byte[] encrypted = null;
+        byte[] jsonBytes = null;
+        try {
+            encrypted = Files.readAllBytes(sessionFile);
+            if (encrypted.length == 0) {
+                return;
+            }
+            jsonBytes = AesGcmCipher.decrypt(preKeyStoreKey, encrypted, PREKEY_STORE_AAD);
+            PersistedSessions ps = JsonSerializer.fromBytes(jsonBytes, PersistedSessions.class);
+            if (ps != null && ps.sessions != null) {
+                for (PersistedSession s : ps.sessions) {
+                    byte[] sendChainKey = s.sendChainKey != null ? Base64.getDecoder().decode(s.sendChainKey) : null;
+                    byte[] receiveChainKey = s.receiveChainKey != null ? Base64.getDecoder().decode(s.receiveChainKey) : null;
+                    Map<Long, DoubleRatchetSession.SkippedKey> skippedKeys = new java.util.LinkedHashMap<>();
+                    if (s.skippedKeys != null) {
+                        for (PersistedSkippedKey sk : s.skippedKeys) {
+                            byte[] keyBytes = sk.key != null ? Base64.getDecoder().decode(sk.key) : null;
+                            skippedKeys.put(sk.msgId, new DoubleRatchetSession.SkippedKey(keyBytes, sk.createdAtMillis));
+                        }
+                    }
+                    DoubleRatchetSession session = new DoubleRatchetSession(
+                            s.conversationId,
+                            s.localId,
+                            s.remoteId,
+                            sendChainKey,
+                            receiveChainKey,
+                            s.nextSendMsgId,
+                            s.nextReceiveMsgId,
+                            skippedKeys
+                    );
+                    sessionsByConversation.put(s.conversationId, session);
+                    ratchetSessions.put(s.remoteId, session);
+                }
+                log.info("Khôi phục thành công {} Double Ratchet sessions cho user={}", ps.sessions.size(), currentUsername);
+            }
+        } catch (Exception e) {
+            log.warn("Could not load E2EE Double Ratchet sessions", e);
+        } finally {
+            zero(encrypted);
+            zero(jsonBytes);
+        }
+    }
+
+    public static class PersistedSessions {
+        public List<PersistedSession> sessions = new ArrayList<>();
+    }
+
+    public static class PersistedSession {
+        public String conversationId;
+        public String localId;
+        public String remoteId;
+        public String sendChainKey;
+        public String receiveChainKey;
+        public long nextSendMsgId;
+        public long nextReceiveMsgId;
+        public List<PersistedSkippedKey> skippedKeys = new ArrayList<>();
+    }
+
+    public static class PersistedSkippedKey {
+        public long msgId;
+        public String key;
+        public long createdAtMillis;
     }
 }

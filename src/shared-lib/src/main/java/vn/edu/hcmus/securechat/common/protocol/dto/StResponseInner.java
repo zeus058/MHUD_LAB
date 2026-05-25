@@ -25,12 +25,31 @@ public class StResponseInner {
     @JsonProperty("targetServer")
     private String targetServer;
 
+    @JsonProperty("stId")
+    private String stId;
+
+    @JsonProperty("issuedAt")
+    private long issuedAt;
+
+    @JsonProperty("expiresAt")
+    private long expiresAt;
+
     public StResponseInner() {}
 
     public StResponseInner(String sessionKey, String nonce, String targetServer) {
         this.sessionKey = sessionKey;
         this.nonce = nonce;
         this.targetServer = targetServer;
+    }
+
+    public StResponseInner(String sessionKey, String nonce, String targetServer,
+                           String stId, long issuedAt, long expiresAt) {
+        this.sessionKey = sessionKey;
+        this.nonce = nonce;
+        this.targetServer = targetServer;
+        this.stId = stId;
+        this.issuedAt = issuedAt;
+        this.expiresAt = expiresAt;
     }
 
     public String getSessionKey() { return sessionKey; }
@@ -41,4 +60,13 @@ public class StResponseInner {
 
     public String getTargetServer() { return targetServer; }
     public void setTargetServer(String targetServer) { this.targetServer = targetServer; }
+
+    public String getStId() { return stId; }
+    public void setStId(String stId) { this.stId = stId; }
+
+    public long getIssuedAt() { return issuedAt; }
+    public void setIssuedAt(long issuedAt) { this.issuedAt = issuedAt; }
+
+    public long getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(long expiresAt) { this.expiresAt = expiresAt; }
 }

@@ -26,11 +26,20 @@ public class TgtRequest {
     @JsonProperty("cert")
     private String cert;
 
+    @JsonProperty("dilithiumCert")
+    private String dilithiumCert;
+
     @JsonProperty("timestamp")
     private long timestamp; // unix epoch seconds
 
     @JsonProperty("signature")
     private String signature; // Base64 signature of (clientId + "|" + targetTgs + "|" + nonce + "|" + timestamp)
+
+    @JsonProperty("dilithiumSignature")
+    private String dilithiumSignature;
+
+    @JsonProperty("channelBinding")
+    private String channelBinding;
 
     public TgtRequest() {}
 
@@ -70,9 +79,18 @@ public class TgtRequest {
     public String getCert() { return cert; }
     public void setCert(String cert) { this.cert = cert; }
 
+    public String getDilithiumCert() { return dilithiumCert; }
+    public void setDilithiumCert(String dilithiumCert) { this.dilithiumCert = dilithiumCert; }
+
     public long getTimestamp() { return timestamp; }
     public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
 
     public String getSignature() { return signature; }
     public void setSignature(String signature) { this.signature = signature; }
+
+    public String getDilithiumSignature() { return dilithiumSignature; }
+    public void setDilithiumSignature(String dilithiumSignature) { this.dilithiumSignature = dilithiumSignature; }
+
+    public String getChannelBinding() { return channelBinding; }
+    public void setChannelBinding(String channelBinding) { this.channelBinding = channelBinding; }
 }

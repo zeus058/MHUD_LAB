@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.client.model.SecurityState;
 import vn.edu.hcmus.securechat.client.model.SecurityState.ConnectionStatus;
+import vn.edu.hcmus.securechat.client.ui.ActivityFlowPanel;
 import vn.edu.hcmus.securechat.client.ui.ChatPanel;
 import vn.edu.hcmus.securechat.client.ui.LoginPanel;
 import vn.edu.hcmus.securechat.client.ui.RegisterPanel;
@@ -132,24 +133,42 @@ public class ClientApp extends JFrame {
                     log.info("Establishing secure session for user={}", username);
 
                     // 1. Đồng bộ thời gian
+                    loginPanel.trace("Đồng bộ thời gian", "Lấy mốc thời gian mạng để chống replay trong cửa sổ 300 giây.",
+                            ActivityFlowPanel.Tone.ACTIVE);
                     NtpTimeClient.syncTime();
+                    loginPanel.trace("Thời gian hợp lệ", "Timestamp cho authenticator sẽ dùng đồng hồ đã đồng bộ.",
+                            ActivityFlowPanel.Tone.SUCCESS);
 
                     // 2. Lấy vé Kerberos
                     KerberosClient kerberosClient = new KerberosClient();
+                    loginPanel.trace("Xin TGT", "Client ký TGT request bằng chứng chỉ X.509 và gửi tới AS.",
+                            ActivityFlowPanel.Tone.ACTIVE);
                     kerberosClient.requestTgt(username, password);
+                    loginPanel.trace("TGT đã cấp", "AS đã trả TGT và K_A_TGS; cache cục bộ được mã hóa bằng Argon2id.",
+                            ActivityFlowPanel.Tone.SUCCESS);
+                    loginPanel.trace("Xin ST", "TGS kiểm tra TGT, authenticator và Proof-of-Possession để cấp vé chat.",
+                            ActivityFlowPanel.Tone.ACTIVE);
                     kerberosClient.requestSt(username, password, ServerConfig.CHAT_HOST);
+                    loginPanel.trace("ST đã cấp", "Service Ticket chứa Control Vector CHAT_SERVICE và khóa K_A_ChatAuth.",
+                            ActivityFlowPanel.Tone.SUCCESS);
 
                     // 3. Handshake E2EE thực sự với Chat Server (dùng ST)
                     E2eeCryptoService e2eeService = new E2eeCryptoService();
+                    e2eeService.setActivitySink((title, body, tone) ->
+                            loginPanel.trace(title, body, ActivityFlowPanel.Tone.valueOf(tone.name())));
                     e2eeService.performHandshake(username, password);
 
-                    // 4. Mở khóa CSDL nội bộ bằng PBKDF2 derived key
+                    // 4. Mở khóa CSDL nội bộ bằng Argon2id-derived key
+                    loginPanel.trace("Mở CSDL cục bộ", "Lịch sử chat được giải khóa bằng key dẫn xuất Argon2id.",
+                            ActivityFlowPanel.Tone.ACTIVE);
                     LocalDatabase localDb = new LocalDatabase(username);
                     localDb.unlockDatabase(password);
                     if (!localDb.isUnlocked()) {
                         throw new vn.edu.hcmus.securechat.common.exception.KeyDerivationException(
                                 "Không mở khóa được lịch sử chat cục bộ");
                     }
+                    loginPanel.trace("Phiên sẵn sàng", "Đăng nhập hoàn tất; nội dung tin nhắn sẽ dùng Double Ratchet.",
+                            ActivityFlowPanel.Tone.SUCCESS);
 
                     return new Object[]{e2eeService, localDb};
                 } finally {

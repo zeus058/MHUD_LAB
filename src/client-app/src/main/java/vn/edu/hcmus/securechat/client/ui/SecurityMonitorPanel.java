@@ -141,7 +141,8 @@ public class SecurityMonitorPanel extends JPanel {
         return encryption
                 .replace(" + ", "\n")
                 .replace("AES-256-GCM", "AES-256-GCM (tin nhắn)")
-                .replace("Kyber-768", "Kyber-768 (PQC)");
+                .replace("ML-KEM-768", "ML-KEM-768 (PQC)")
+                .replace("Double Ratchet", "Double Ratchet (message key)");
     }
 
     private static String formatCertificate(String cert) {

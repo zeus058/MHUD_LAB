@@ -1,10 +1,10 @@
 package vn.edu.hcmus.securechat.common.config;
 
 public final class ServerConfig {
-    public static final String CA_HOST = "100.113.166.65"; // đổi thành IP máy server khi chạy 2 máy LAN
-    public static final String AS_HOST = "100.113.166.65";
-    public static final String TGS_HOST = "100.113.166.65";
-    public static final String CHAT_HOST = "100.113.166.65";
+    public static final String CA_HOST = "localhost"; // đổi thành IP máy server khi chạy 2 máy LAN
+    public static final String AS_HOST = "localhost";
+    public static final String TGS_HOST = "localhost";
+    public static final String CHAT_HOST = "localhost";
 
     public static final int CA_PORT = 8443; // CA Server (PKI + OCSP)
     public static final int AS_PORT = 8881; // Authentication Server

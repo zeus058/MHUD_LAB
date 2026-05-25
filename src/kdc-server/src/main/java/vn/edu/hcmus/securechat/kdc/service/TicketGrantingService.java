@@ -1,9 +1,11 @@
 package vn.edu.hcmus.securechat.kdc.service;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +16,7 @@ import vn.edu.hcmus.securechat.common.exception.CryptoException;
 import vn.edu.hcmus.securechat.common.exception.InvalidTicketException;
 import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.exception.ReplayAttackException;
+import vn.edu.hcmus.securechat.common.crypto.RateLimitService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
@@ -46,6 +49,7 @@ public class TicketGrantingService {
 
     private final KdcKeyManager keyManager;
     private final ReplayDefenseService replayDefense;
+    private final RateLimitService rateLimiter = new RateLimitService();
     private final vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage;
 
     public TicketGrantingService(KdcKeyManager keyManager, ReplayDefenseService replayDefense, vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage) {
@@ -67,10 +71,12 @@ public class TicketGrantingService {
 
         byte[] sessionKeyTgs = null;
         byte[] sessionKeyChat = null;
+        String rateClientId = "UNKNOWN";
 
         try {
             // 1. Validate request fields
             validateStRequest(request);
+            rateLimiter.check("TGS_IP", clientIp, 20, Duration.ofMinutes(1));
 
             // 2. Giải mã TGT bằng TGS Private Key (Hybrid Decrypt)
             byte[] encryptedTgt = Base64.getDecoder().decode(request.getTgt());
@@ -79,6 +85,11 @@ public class TicketGrantingService {
 
             // 3. Deserialize TgtInner
             TgtInner tgtInner = JsonSerializer.fromBytes(tgtBytes, TgtInner.class);
+            rateClientId = tgtInner.getClientId();
+            rateLimiter.checkFailureCooldown("TGS_CLIENT_FAILURE", rateClientId);
+            String effectiveTgtId = !isBlank(tgtInner.getTgtId())
+                    ? tgtInner.getTgtId()
+                    : ticketFingerprint(request.getTgt());
             log.info("TGT decrypted: clientId={}, expires={}",
                     tgtInner.getClientId(),
                     Instant.ofEpochSecond(tgtInner.getExpiresAt()));
@@ -143,23 +154,26 @@ public class TicketGrantingService {
 
             // 11. Tạo StInner
             long expiresAt = now + CryptoConstants.ST_LIFETIME_SECONDS;
-            String clientPubKeyB64 = ""; // Client public key sẽ được trích từ TGT nếu cần
+            String stId = UUID.randomUUID().toString();
+            String clientPubKeyB64 = Base64.getEncoder().encodeToString(clientCert.getPublicKey().getEncoded());
 
             StInner stInner = new StInner(
+                    stId,
                     tgtInner.getClientId(),
                     clientPubKeyB64,
                     request.getTargetServer(),
                     now,
                     expiresAt,
                     sessionKeyChatB64,
-                    ControlVector.ST_CV
+                    ControlVector.ST_CV,
+                    clientCert.getSerialNumber().toString(16)
             );
 
             // 12. Serialize StInner → JSON bytes
             byte[] stInnerBytes = JsonSerializer.toBytes(stInner);
 
             // 13. Hybrid Encrypt StInner bằng PU_ChatServer
-            byte[] encryptedSt = HybridEncryption.encrypt(
+            byte[] encryptedSt = HybridEncryption.encryptForWindowsKeyStoreRecipient(
                     keyManager.getChatServerPublicKey(), stInnerBytes);
             String stB64 = Base64.getEncoder().encodeToString(encryptedSt);
 
@@ -167,7 +181,10 @@ public class TicketGrantingService {
             StResponseInner responseInner = new StResponseInner(
                     sessionKeyChatB64,
                     authenticator.getNonce(),
-                    request.getTargetServer()
+                    request.getTargetServer(),
+                    stId,
+                    now,
+                    expiresAt
             );
 
             // 15. Serialize ResponseInner → JSON bytes
@@ -186,17 +203,14 @@ public class TicketGrantingService {
                 storage.recordStIssued(tgtInner.getClientId(), request.getTargetServer(), now, expiresAt, clientIp, ControlVector.ST_CV);
                 storage.logAuditEvent("ST_ISSUED", tgtInner.getClientId(), clientIp, "ST issued to " + request.getTargetServer(), true);
 
-                // Tính ticketId từ SHA-256 hash của encrypted ST
-                byte[] stHash = java.security.MessageDigest.getInstance("SHA-256").digest(encryptedSt);
-                String ticketId = Base64.getEncoder().encodeToString(stHash);
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         tgtInner.getClientId(),
                         clientCert.getSerialNumber().toString(16),
-                        ticketId,
+                        stId,
                         request.getTargetServer(),
                         "ST_REQUEST",
                         "SUCCESS",
-                        "ST successfully issued"
+                        "ST successfully issued from TGT " + effectiveTgtId
                 );
             } catch (Exception e) {
                 log.warn("Failed to record ST issuance in storage or secure log chain", e);
@@ -205,10 +219,12 @@ public class TicketGrantingService {
             log.info("ST issued for client={}, target={}, expires={}",
                     tgtInner.getClientId(), request.getTargetServer(),
                     Instant.ofEpochSecond(expiresAt));
+            rateLimiter.recordSuccess("TGS_CLIENT_FAILURE", tgtInner.getClientId());
 
             return new StResponse(stB64, responseB64);
 
         } catch (ProtocolException | CryptoException e) {
+            rateLimiter.recordFailure("TGS_CLIENT_FAILURE", rateClientId, 5, Duration.ofMinutes(15));
             try {
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         "UNKNOWN",
@@ -224,6 +240,7 @@ public class TicketGrantingService {
             }
             throw e;
         } catch (Exception e) {
+            rateLimiter.recordFailure("TGS_CLIENT_FAILURE", rateClientId, 5, Duration.ofMinutes(15));
             try {
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         "UNKNOWN",
@@ -258,5 +275,19 @@ public class TicketGrantingService {
         if (request.getTargetServer() == null || request.getTargetServer().isBlank()) {
             throw new ProtocolException("ST request missing targetServer");
         }
+    }
+
+    private static String ticketFingerprint(String ticketBase64) throws CryptoException {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(Base64.getDecoder().decode(ticketBase64));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (Exception e) {
+            throw new CryptoException("Failed to fingerprint ticket", e);
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

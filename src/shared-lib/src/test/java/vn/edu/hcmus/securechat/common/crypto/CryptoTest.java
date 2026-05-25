@@ -61,6 +61,20 @@ class CryptoTest {
     }
 
     @Test
+    void testAesGcmAadTamper() throws CryptoException {
+        byte[] key = new byte[32];
+        new SecureRandom().nextBytes(key);
+
+        byte[] plaintext = "AAD-bound message".getBytes(StandardCharsets.UTF_8);
+        byte[] aad = "conversation|1|alice|bob".getBytes(StandardCharsets.UTF_8);
+        byte[] wrongAad = "conversation|1|mallory|bob".getBytes(StandardCharsets.UTF_8);
+        byte[] encrypted = AesGcmCipher.encrypt(key, plaintext, aad);
+
+        assertThrows(MacVerificationException.class, () ->
+                AesGcmCipher.decrypt(key, encrypted, wrongAad));
+    }
+
+    @Test
     void testAesGcmTestVector() throws Exception {
         JsonNode tv = loadTestVectors().get("aes_gcm");
 

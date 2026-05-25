@@ -13,8 +13,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public class ChatMessage {
 
+    @JsonProperty("conversationId")
+    private String conversationId;
+
+    @JsonProperty("msgId")
+    private long msgId;
+
     @JsonProperty("senderId")
     private String senderId;
+
+    @JsonProperty("recipientId")
+    private String recipientId;
 
     @JsonProperty("content")
     private String content;
@@ -30,8 +39,27 @@ public class ChatMessage {
         this.sentAt = sentAt;
     }
 
+    public ChatMessage(String conversationId, long msgId, String senderId,
+                       String recipientId, String content, long sentAt) {
+        this.conversationId = conversationId;
+        this.msgId = msgId;
+        this.senderId = senderId;
+        this.recipientId = recipientId;
+        this.content = content;
+        this.sentAt = sentAt;
+    }
+
+    public String getConversationId() { return conversationId; }
+    public void setConversationId(String conversationId) { this.conversationId = conversationId; }
+
+    public long getMsgId() { return msgId; }
+    public void setMsgId(long msgId) { this.msgId = msgId; }
+
     public String getSenderId() { return senderId; }
     public void setSenderId(String senderId) { this.senderId = senderId; }
+
+    public String getRecipientId() { return recipientId; }
+    public void setRecipientId(String recipientId) { this.recipientId = recipientId; }
 
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }

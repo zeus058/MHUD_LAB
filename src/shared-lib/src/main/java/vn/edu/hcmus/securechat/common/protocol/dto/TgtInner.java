@@ -17,6 +17,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public class TgtInner {
 
+    @JsonProperty("tgtId")
+    private String tgtId;
+
     @JsonProperty("clientId")
     private String clientId;
 
@@ -29,6 +32,9 @@ public class TgtInner {
     @JsonProperty("expiresAt")
     private long expiresAt;
 
+    @JsonProperty("renewTill")
+    private long renewTill;
+
     @JsonProperty("sessionKey")
     private String sessionKey;
 
@@ -40,6 +46,9 @@ public class TgtInner {
 
     @JsonProperty("clientCert")
     private String clientCert; // Base64 of DER-encoded client certificate
+
+    @JsonProperty("clientDilithiumCert")
+    private String clientDilithiumCert;
 
     public TgtInner() {}
 
@@ -66,6 +75,25 @@ public class TgtInner {
         this.clientCert = clientCert;
     }
 
+    public TgtInner(String tgtId, String clientId, String targetTgs, long issuedAt,
+                    long expiresAt, long renewTill, String sessionKey, boolean renewable,
+                    String cv, String clientCert, String clientDilithiumCert) {
+        this.tgtId = tgtId;
+        this.clientId = clientId;
+        this.targetTgs = targetTgs;
+        this.issuedAt = issuedAt;
+        this.expiresAt = expiresAt;
+        this.renewTill = renewTill;
+        this.sessionKey = sessionKey;
+        this.renewable = renewable;
+        this.cv = cv;
+        this.clientCert = clientCert;
+        this.clientDilithiumCert = clientDilithiumCert;
+    }
+
+    public String getTgtId() { return tgtId; }
+    public void setTgtId(String tgtId) { this.tgtId = tgtId; }
+
     public String getClientId() { return clientId; }
     public void setClientId(String clientId) { this.clientId = clientId; }
 
@@ -78,6 +106,9 @@ public class TgtInner {
     public long getExpiresAt() { return expiresAt; }
     public void setExpiresAt(long expiresAt) { this.expiresAt = expiresAt; }
 
+    public long getRenewTill() { return renewTill; }
+    public void setRenewTill(long renewTill) { this.renewTill = renewTill; }
+
     public String getSessionKey() { return sessionKey; }
     public void setSessionKey(String sessionKey) { this.sessionKey = sessionKey; }
 
@@ -89,4 +120,7 @@ public class TgtInner {
 
     public String getClientCert() { return clientCert; }
     public void setClientCert(String clientCert) { this.clientCert = clientCert; }
+
+    public String getClientDilithiumCert() { return clientDilithiumCert; }
+    public void setClientDilithiumCert(String clientDilithiumCert) { this.clientDilithiumCert = clientDilithiumCert; }
 }

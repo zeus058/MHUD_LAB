@@ -5,6 +5,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.security.KeyPair;
 import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
@@ -44,9 +45,15 @@ import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.E2eeInitMessage;
 import vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope;
 import vn.edu.hcmus.securechat.common.protocol.dto.ErrorResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.OneTimePreKey;
+import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyBundle;
+import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.SessionTicket;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
+import vn.edu.hcmus.securechat.common.protocol.dto.UserListEntry;
 
 /**
  * Chat Server - routes encrypted E2EE messages between authenticated clients.
@@ -64,16 +71,19 @@ public class ChatServerMain {
     private final Map<String, ClientSession> activeSessions = new ConcurrentHashMap<>();
     private final Map<Socket, String> clientIdsBySocket = new ConcurrentHashMap<>();
     private final Map<Socket, Object> socketWriteLocks = new ConcurrentHashMap<>();
+    private final Map<String, PreKeyBundle> preKeyBundles = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastSeenAtByClient = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
     
     // Offline message queue
-    private record OfflineMessage(String senderId, String recipientId, byte[] plaintext) {}
+    private record OfflineMessage(String senderId, String recipientId, byte type, byte[] payload, boolean e2eeEnvelope) {}
     private final Map<String, java.util.List<OfflineMessage>> offlineMessages = new ConcurrentHashMap<>();
 
     private ChatKeyManager keyManager;
     private OcspStaplingManager ocspManager;
     private KeyPair serverKyberPair;
+    private byte[] ticketServerKey;
 
     public ChatServerMain() {
         this.port = ServerConfig.CHAT_PORT;
@@ -107,6 +117,10 @@ public class ChatServerMain {
             // 3. Initialize ML-KEM-768 KeyPair
             serverKyberPair = KyberKemService.generateKeyPair();
             log.info("ML-KEM-768 key pair generated for Chat Server");
+
+            ticketServerKey = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
+            new SecureRandom().nextBytes(ticketServerKey);
+            log.info("Chat access-ticket sealing key initialized");
             
         } catch (Exception e) {
             log.error("Failed to initialize Chat Server dependencies", e);
@@ -128,6 +142,7 @@ public class ChatServerMain {
             threadPool.shutdown();
             replayDefense.shutdown();
             if (ocspManager != null) ocspManager.shutdown();
+            zero(ticketServerKey);
             log.info("Chat Server stopped.");
         }
     }
@@ -151,6 +166,9 @@ public class ChatServerMain {
                 switch (type) {
                     case CHAT_HANDSHAKE -> handleHandshake(frame, socket, clientAddr);
                     case CHAT_MESSAGE -> handleChatMessage(frame, socket, clientAddr);
+                    case PREKEY_UPLOAD -> handlePreKeyUpload(frame, socket);
+                    case PREKEY_REQUEST -> handlePreKeyRequest(frame, socket);
+                    case E2EE_INIT -> handleE2eeInit(frame, socket, clientAddr);
                     default -> {
                         log.warn("Unexpected message type {} from {}", type, clientAddr);
                         sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Unexpected message type");
@@ -204,15 +222,18 @@ public class ChatServerMain {
                 closeQuietly(previous.socket());
             }
             clientIdsBySocket.put(socket, clientId);
+            lastSeenAtByClient.put(clientId, Instant.now().getEpochSecond());
 
             String ecdhePubKeyBase64 = EcdheService.encodePublicKey(ecdhePair.getPublic());
+            String accessTicket = createAccessTicket(serviceTicket, auth);
             
             ChatHandshakeResponse response = new ChatHandshakeResponse(
                     "OK",
                     clientId,
                     ecdhePubKeyBase64,
                     serviceTicket.getExpiresAt(),
-                    masterSessionKey != ticketSessionKey);
+                    masterSessionKey != ticketSessionKey,
+                    accessTicket);
                     
             writeFrame(socket, PacketFrame.TYPE_CHAT_HANDSHAKE, JsonSerializer.toBytes(response));
 
@@ -243,9 +264,13 @@ public class ChatServerMain {
             if (pending != null) {
                 for (OfflineMessage offMsg : pending) {
                     try {
-                        byte[] reEncrypted = AesGcmCipher.encrypt(masterSessionKey, offMsg.plaintext);
-                        EncryptedChatEnvelope env = new EncryptedChatEnvelope(clientId, Base64.getEncoder().encodeToString(reEncrypted));
-                        writeFrame(socket, PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(env));
+                        if (offMsg.e2eeEnvelope) {
+                            writeFrame(socket, offMsg.type, offMsg.payload);
+                        } else {
+                            byte[] reEncrypted = AesGcmCipher.encrypt(masterSessionKey, offMsg.payload);
+                            EncryptedChatEnvelope env = new EncryptedChatEnvelope(clientId, Base64.getEncoder().encodeToString(reEncrypted));
+                            writeFrame(socket, offMsg.type, JsonSerializer.toBytes(env));
+                        }
                     } catch (Exception ex) {
                         log.warn("Failed to send offline message", ex);
                     }
@@ -331,6 +356,28 @@ public class ChatServerMain {
             EncryptedChatEnvelope envelope = JsonSerializer.fromBytes(frame.getPayload(), EncryptedChatEnvelope.class);
             validateMessageEnvelope(envelope);
 
+            if (isE2eeV2Envelope(envelope)) {
+                validateEnvelopeSender(envelope, sender.clientId());
+                ClientSession recipient = activeSessions.get(envelope.getRecipientId());
+                if (recipient == null || recipient.socket().isClosed()) {
+                    offlineMessages.computeIfAbsent(envelope.getRecipientId(),
+                            k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                            .add(new OfflineMessage(sender.clientId(), envelope.getRecipientId(),
+                                    PacketFrame.TYPE_CHAT_MESSAGE,
+                                    Arrays.copyOf(frame.getPayload(), frame.getPayload().length), true));
+                    log.info("Stored offline E2EE envelope from {} to {}",
+                            sender.clientId(), envelope.getRecipientId());
+                    broadcastUserList();
+                } else {
+                    writeFrame(recipient.socket(), PacketFrame.TYPE_CHAT_MESSAGE, frame.getPayload());
+                    log.info("Routed E2EE envelope from {} to {} without decryption",
+                            sender.clientId(), envelope.getRecipientId());
+                }
+                auditLog.info("MESSAGE_ROUTED_E2EE from={} to={} ip={}",
+                        sender.clientId(), envelope.getRecipientId(), clientAddr);
+                return;
+            }
+
             byte[] plaintext = null;
             try {
                 byte[] cipherPayload = decodeRequired(envelope.getPayload(), "payload");
@@ -340,9 +387,11 @@ public class ChatServerMain {
 
                 ClientSession recipient = activeSessions.get(envelope.getRecipientId());
                 if (recipient == null || recipient.socket().isClosed()) {
-                    OfflineMessage offMsg = new OfflineMessage(sender.clientId(), envelope.getRecipientId(), Arrays.copyOf(plaintext, plaintext.length));
+                    OfflineMessage offMsg = new OfflineMessage(sender.clientId(), envelope.getRecipientId(),
+                            PacketFrame.TYPE_CHAT_MESSAGE, Arrays.copyOf(plaintext, plaintext.length), false);
                     offlineMessages.computeIfAbsent(envelope.getRecipientId(), k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(offMsg);
                     log.info("Stored offline message from {} to {}", sender.clientId(), envelope.getRecipientId());
+                    broadcastUserList();
                 } else {
                     byte[] reEncrypted = AesGcmCipher.encrypt(recipient.sessionKey(), plaintext);
                     envelope.setPayload(Base64.getEncoder().encodeToString(reEncrypted));
@@ -361,6 +410,138 @@ public class ChatServerMain {
         } catch (CryptoException | ProtocolException | IOException | IllegalArgumentException e) {
             log.warn("Could not route message from {}", clientAddr, e);
             sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid chat message");
+        }
+    }
+
+    private void handlePreKeyUpload(PacketFrame frame, Socket socket) {
+        ClientSession session = sessionFor(socket);
+        if (session == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            PreKeyBundle bundle = JsonSerializer.fromBytes(frame.getPayload(), PreKeyBundle.class);
+            if (bundle == null || isBlank(bundle.getOwnerId())) {
+                throw new ProtocolException("Pre-Key bundle missing ownerId");
+            }
+            if (!Objects.equals(session.clientId(), bundle.getOwnerId())) {
+                throw new ProtocolException("Pre-Key bundle owner mismatch");
+            }
+            preKeyBundles.put(session.clientId(), bundle);
+            lastSeenAtByClient.put(session.clientId(), Instant.now().getEpochSecond());
+            int opkCount = bundle.getOneTimePreKeys() == null ? 0 : bundle.getOneTimePreKeys().size();
+            if (opkCount < 10) {
+                auditLog.warn("PREKEY_POOL_LOW clientId={} opkCount={}", session.clientId(), opkCount);
+            }
+            auditLog.info("PREKEY_UPLOADED clientId={} opkCount={}", session.clientId(), opkCount);
+            broadcastUserList();
+        } catch (Exception e) {
+            log.warn("Pre-Key upload failed", e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid Pre-Key bundle");
+        }
+    }
+
+    private void handlePreKeyRequest(PacketFrame frame, Socket socket) {
+        ClientSession requester = sessionFor(socket);
+        if (requester == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            PreKeyRequest request = JsonSerializer.fromBytes(frame.getPayload(), PreKeyRequest.class);
+            if (request == null || isBlank(request.getRecipientId())) {
+                throw new ProtocolException("Pre-Key request missing recipientId");
+            }
+            PreKeyBundle stored = preKeyBundles.get(request.getRecipientId());
+            if (stored == null) {
+                sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Pre-Key bundle unavailable");
+                return;
+            }
+
+            PreKeyBundle response = JsonSerializer.fromBytes(JsonSerializer.toBytes(stored), PreKeyBundle.class);
+            if (stored.getOneTimePreKeys() != null && !stored.getOneTimePreKeys().isEmpty()) {
+                OneTimePreKey consumed = stored.getOneTimePreKeys().remove(0);
+                response.setOneTimePreKeys(java.util.List.of(consumed));
+                response.setLastResort(false);
+            } else {
+                response.setOneTimePreKeys(java.util.List.of());
+                response.setLastResort(true);
+                auditLog.warn("PREKEY_LAST_RESORT requester={} recipient={}",
+                        requester.clientId(), request.getRecipientId());
+            }
+            writeFrame(socket, PacketFrame.TYPE_PREKEY_RESPONSE, JsonSerializer.toBytes(response));
+            auditLog.info("PREKEY_ISSUED requester={} recipient={}",
+                    requester.clientId(), request.getRecipientId());
+        } catch (Exception e) {
+            log.warn("Pre-Key request failed", e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid Pre-Key request");
+        }
+    }
+
+    private void handleE2eeInit(PacketFrame frame, Socket socket, String clientAddr) {
+        ClientSession sender = sessionFor(socket);
+        if (sender == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            E2eeInitMessage init = JsonSerializer.fromBytes(frame.getPayload(), E2eeInitMessage.class);
+            if (init == null || isBlank(init.getConversationId())
+                    || isBlank(init.getSenderId()) || isBlank(init.getRecipientId())) {
+                throw new ProtocolException("E2EE init missing required fields");
+            }
+            if (!Objects.equals(sender.clientId(), init.getSenderId())) {
+                throw new ProtocolException("E2EE init sender mismatch");
+            }
+            ClientSession recipient = activeSessions.get(init.getRecipientId());
+            if (recipient == null || recipient.socket().isClosed()) {
+                offlineMessages.computeIfAbsent(init.getRecipientId(),
+                        k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                        .add(new OfflineMessage(sender.clientId(), init.getRecipientId(),
+                                PacketFrame.TYPE_E2EE_INIT,
+                                Arrays.copyOf(frame.getPayload(), frame.getPayload().length), true));
+                auditLog.info("E2EE_INIT_STORED from={} to={} conversationId={} ip={}",
+                        sender.clientId(), init.getRecipientId(), init.getConversationId(), clientAddr);
+                broadcastUserList();
+            } else {
+                writeFrame(recipient.socket(), PacketFrame.TYPE_E2EE_INIT, frame.getPayload());
+                auditLog.info("E2EE_INIT_FORWARDED from={} to={} conversationId={} ip={}",
+                        sender.clientId(), init.getRecipientId(), init.getConversationId(), clientAddr);
+            }
+        } catch (Exception e) {
+            log.warn("E2EE init failed", e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid E2EE init");
+        }
+    }
+
+    private String createAccessTicket(StInner st, AuthenticatorJson auth)
+            throws CryptoException, ProtocolException {
+        if (ticketServerKey == null) {
+            throw new ProtocolException("Access ticket key is not initialized");
+        }
+        long now = Instant.now().getEpochSecond();
+        long expiresAt = Math.min(st.getExpiresAt(), now + CryptoConstants.ST_LIFETIME_SECONDS);
+        String stId = isBlank(st.getStId()) ? "legacy-st" : st.getStId();
+        String deviceBinding = isBlank(auth.getChannelBinding())
+                ? "unbound:" + st.getClientId()
+                : auth.getChannelBinding();
+        SessionTicket ticket = new SessionTicket(
+                st.getClientId(),
+                deviceBinding,
+                stId,
+                now,
+                expiresAt,
+                java.util.List.of("chat.send", "chat.recv", "prekey.upload"));
+        byte[] plaintext = null;
+        byte[] encrypted = null;
+        try {
+            plaintext = JsonSerializer.toBytes(ticket);
+            encrypted = AesGcmCipher.encrypt(ticketServerKey, plaintext,
+                    "SecureChat-access-ticket-v2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(encrypted);
+        } finally {
+            zero(plaintext);
+            zero(encrypted);
         }
     }
 
@@ -474,6 +655,19 @@ public class ChatServerMain {
         }
     }
 
+    private boolean isE2eeV2Envelope(EncryptedChatEnvelope envelope) {
+        return !isBlank(envelope.getConversationId())
+                && !isBlank(envelope.getSenderId())
+                && !isBlank(envelope.getAadHash())
+                && envelope.getMsgId() > 0;
+    }
+
+    private void validateEnvelopeSender(EncryptedChatEnvelope envelope, String expectedSender) {
+        if (!Objects.equals(expectedSender, envelope.getSenderId())) {
+            throw new IllegalArgumentException("envelope senderId does not match authenticated session");
+        }
+    }
+
     private void validateSender(JsonNode message, String expectedSender) {
         JsonNode senderNode = message.get("senderId");
         if (senderNode == null || !expectedSender.equals(senderNode.asText())) {
@@ -526,18 +720,43 @@ public class ChatServerMain {
             return;
         }
 
-        ClientSession removed = activeSessions.remove(clientId);
+        ClientSession current = activeSessions.get(clientId);
+        ClientSession removed = null;
+        if (current != null && current.socket() == socket) {
+            removed = current;
+            activeSessions.remove(clientId, current);
+        }
         if (removed != null) {
             zero(removed.sessionKey());
-            long duration = Instant.now().getEpochSecond() - removed.establishedAt();
+            long endedAt = Instant.now().getEpochSecond();
+            long duration = endedAt - removed.establishedAt();
+            lastSeenAtByClient.put(clientId, endedAt);
             auditLog.info("SESSION_ENDED sessionId={} clientId={} duration_seconds={}",
                     removed.sessionId(), clientId, duration);
+            broadcastUserList();
         }
-        broadcastUserList();
     }
 
     private void broadcastUserList() {
-        java.util.List<String> users = new java.util.ArrayList<>(activeSessions.keySet());
+        java.util.Set<String> userIds = new java.util.TreeSet<>();
+        userIds.addAll(activeSessions.keySet());
+        userIds.addAll(preKeyBundles.keySet());
+        userIds.addAll(offlineMessages.keySet());
+        userIds.addAll(lastSeenAtByClient.keySet());
+
+        java.util.List<UserListEntry> users = new java.util.ArrayList<>();
+        for (String userId : userIds) {
+            if (isBlank(userId)) {
+                continue;
+            }
+            ClientSession session = activeSessions.get(userId);
+            boolean online = session != null && !session.socket().isClosed();
+            boolean preKeyAvailable = preKeyBundles.containsKey(userId);
+            long lastSeenAt = online && session != null
+                    ? session.establishedAt()
+                    : lastSeenAtByClient.getOrDefault(userId, 0L);
+            users.add(new UserListEntry(userId, online, preKeyAvailable, lastSeenAt));
+        }
         try {
             byte[] payload = JsonSerializer.toBytes(users);
             for (ClientSession session : activeSessions.values()) {
@@ -556,6 +775,7 @@ public class ChatServerMain {
         if (ocspManager != null) {
             ocspManager.shutdown();
         }
+        zero(ticketServerKey);
     }
 
     private static boolean isBlank(String value) {

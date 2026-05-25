@@ -2,9 +2,11 @@ package vn.edu.hcmus.securechat.kdc.service;
 
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +24,7 @@ import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponseInner;
 import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
+import vn.edu.hcmus.securechat.common.crypto.RateLimitService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
 
@@ -41,12 +44,12 @@ public class AuthenticationService {
     private static final Logger log = LoggerFactory.getLogger(AuthenticationService.class);
     private static final Logger auditLog = LoggerFactory.getLogger("securechat.audit");
 
-    private static final String TGT_CV =
-            ControlVector.ENCRYPT_ONLY + "|" + ControlVector.TGS_SERVICE + "|" + ControlVector.EXPIRY_8H;
+    private static final String TGT_CV = ControlVector.TGT_CV;
 
     private final KdcKeyManager keyManager;
     private final OcspClient ocspClient;
     private final ReplayDefenseService replayDefense;
+    private final RateLimitService rateLimiter = new RateLimitService();
     private final vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage;
 
     public AuthenticationService(KdcKeyManager keyManager, OcspClient ocspClient, ReplayDefenseService replayDefense, vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage) {
@@ -71,6 +74,8 @@ public class AuthenticationService {
         try {
             // 1. Validate request fields
             validateTgtRequest(request);
+            rateLimiter.check("AS_IP", clientIp, 10, Duration.ofMinutes(1));
+            rateLimiter.checkFailureCooldown("AS_CLIENT_FAILURE", request.getClientId());
 
             // 2. Decode và verify client certificate
             byte[] certDer = Base64.getDecoder().decode(request.getCert());
@@ -122,23 +127,28 @@ public class AuthenticationService {
             // 6. Tạo TgtInner
             long now = Instant.now().getEpochSecond();
             long expiresAt = now + CryptoConstants.TGT_LIFETIME_SECONDS;
+            long renewTill = now + CryptoConstants.TICKET_RENEW_TILL_SECONDS;
+            String tgtId = UUID.randomUUID().toString();
 
             TgtInner tgtInner = new TgtInner(
+                    tgtId,
                     request.getClientId(),
                     request.getTargetTgs(),
                     now,
                     expiresAt,
+                    renewTill,
                     sessionKeyB64,
                     true,   // renewable
                     TGT_CV,
-                    request.getCert()
+                    request.getCert(),
+                    request.getDilithiumCert()
             );
 
             // 7. Serialize TgtInner → JSON bytes
             byte[] tgtInnerBytes = JsonSerializer.toBytes(tgtInner);
 
             // 8. Hybrid Encrypt TgtInner bằng PU_TGS
-            byte[] encryptedTgt = HybridEncryption.encrypt(
+            byte[] encryptedTgt = HybridEncryption.encryptForWindowsKeyStoreRecipient(
                     keyManager.getTgsPublicKey(), tgtInnerBytes);
             String tgtB64 = Base64.getEncoder().encodeToString(encryptedTgt);
 
@@ -146,7 +156,11 @@ public class AuthenticationService {
             TgtResponseInner responseInner = new TgtResponseInner(
                     sessionKeyB64,
                     request.getNonce(),
-                    request.getTargetTgs()
+                    request.getTargetTgs(),
+                    tgtId,
+                    now,
+                    expiresAt,
+                    renewTill
             );
 
             // 10. Serialize ResponseInner → JSON bytes
@@ -165,13 +179,10 @@ public class AuthenticationService {
                 storage.recordTgtIssued(request.getClientId(), request.getTargetTgs(), now, expiresAt, clientIp, TGT_CV);
                 storage.logAuditEvent("TGT_ISSUED", request.getClientId(), clientIp, "TGT issued", true);
                 
-                // Tính ticketId từ SHA-256 hash của encrypted TGT
-                byte[] tgtHash = java.security.MessageDigest.getInstance("SHA-256").digest(encryptedTgt);
-                String ticketId = Base64.getEncoder().encodeToString(tgtHash);
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         request.getClientId(),
                         certSerial,
-                        ticketId,
+                        tgtId,
                         request.getTargetTgs(),
                         "TGT_REQUEST",
                         "SUCCESS",
@@ -183,10 +194,14 @@ public class AuthenticationService {
 
             log.info("TGT issued for client={}, expires={}",
                     request.getClientId(), Instant.ofEpochSecond(expiresAt));
+            rateLimiter.recordSuccess("AS_CLIENT_FAILURE", request.getClientId());
 
             return new TgtResponse(tgtB64, responseB64);
 
         } catch (ProtocolException | vn.edu.hcmus.securechat.common.exception.PkiException | CryptoException e) {
+            if (request != null) {
+                rateLimiter.recordFailure("AS_CLIENT_FAILURE", request.getClientId(), 5, Duration.ofMinutes(15));
+            }
             try {
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         request != null ? request.getClientId() : "UNKNOWN",
@@ -202,6 +217,9 @@ public class AuthenticationService {
             }
             throw e;
         } catch (Exception e) {
+            if (request != null) {
+                rateLimiter.recordFailure("AS_CLIENT_FAILURE", request.getClientId(), 5, Duration.ofMinutes(15));
+            }
             try {
                 vn.edu.hcmus.securechat.common.crypto.SecureLogChain.logEvent(
                         request != null ? request.getClientId() : "UNKNOWN",

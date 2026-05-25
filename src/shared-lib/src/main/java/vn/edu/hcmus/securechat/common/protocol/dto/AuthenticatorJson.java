@@ -22,12 +22,36 @@ public class AuthenticatorJson {
     @JsonProperty("nonce")
     private String nonce;
 
+    @JsonProperty("ticketId")
+    private String ticketId;
+
+    @JsonProperty("targetService")
+    private String targetService;
+
+    @JsonProperty("seqNum")
+    private long seqNum;
+
+    @JsonProperty("channelBinding")
+    private String channelBinding;
+
     public AuthenticatorJson() {}
 
     public AuthenticatorJson(String clientId, long timestamp, String nonce) {
         this.clientId = clientId;
         this.timestamp = timestamp;
         this.nonce = nonce;
+    }
+
+    public AuthenticatorJson(String clientId, long timestamp, String nonce,
+                             String ticketId, String targetService, long seqNum,
+                             String channelBinding) {
+        this.clientId = clientId;
+        this.timestamp = timestamp;
+        this.nonce = nonce;
+        this.ticketId = ticketId;
+        this.targetService = targetService;
+        this.seqNum = seqNum;
+        this.channelBinding = channelBinding;
     }
 
     public String getClientId() { return clientId; }
@@ -38,4 +62,16 @@ public class AuthenticatorJson {
 
     public String getNonce() { return nonce; }
     public void setNonce(String nonce) { this.nonce = nonce; }
+
+    public String getTicketId() { return ticketId; }
+    public void setTicketId(String ticketId) { this.ticketId = ticketId; }
+
+    public String getTargetService() { return targetService; }
+    public void setTargetService(String targetService) { this.targetService = targetService; }
+
+    public long getSeqNum() { return seqNum; }
+    public void setSeqNum(long seqNum) { this.seqNum = seqNum; }
+
+    public String getChannelBinding() { return channelBinding; }
+    public void setChannelBinding(String channelBinding) { this.channelBinding = channelBinding; }
 }

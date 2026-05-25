@@ -3,7 +3,6 @@ package vn.edu.hcmus.securechat.client.kerberos;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.stream.Stream;
@@ -13,37 +12,54 @@ import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.crypto.Argon2idKeyDerivation;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.Pbkdf2KeyDerivation;
 
 /**
- * Cache vé TGT/ST — định dạng file: [salt 32 bytes][ciphertext AES-GCM] (Contrains.md §3.3).
+ * Cache vé TGT/ST — v2 format: ["SC2A"][Argon2id salt 32 bytes][AES-GCM ciphertext].
+ * Legacy PBKDF2 cache vẫn được đọc để di trú dữ liệu cũ.
  */
 public class TicketCache {
     private static final Logger log = LoggerFactory.getLogger(TicketCache.class);
+    private static final byte[] MAGIC_ARGON2ID = new byte[] {'S', 'C', '2', 'A'};
 
     private TicketCache() {
     }
 
-    public static void saveTicket(String username, String ticketName, byte[] ticketData, char[] password) {
+    public static void saveTicket(String username, String ticketName, byte[] ticketData, char[] password)
+            throws IOException, vn.edu.hcmus.securechat.common.exception.CryptoException {
         log.info("Mã hóa và lưu vé {} cho user={}", ticketName, username);
         byte[] key = null;
+        byte[] salt = null;
+        byte[] encrypted = null;
+        byte[] output = null;
         try {
             ClientStoragePaths.ensureUserDir(username);
-            byte[] salt = new byte[CryptoConstants.PBKDF2_SALT_SIZE];
+            salt = new byte[CryptoConstants.ARGON2ID_SALT_SIZE];
             new SecureRandom().nextBytes(salt);
-            key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
-            byte[] encrypted = AesGcmCipher.encrypt(key, ticketData);
+            key = Argon2idKeyDerivation.deriveDbKey(password, salt);
+            encrypted = AesGcmCipher.encrypt(key, ticketData);
 
             Path file = ClientStoragePaths.ticketCacheFile(username, ticketName);
-            Files.write(file, salt, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            Files.write(file, encrypted, StandardOpenOption.APPEND);
+            output = new byte[MAGIC_ARGON2ID.length + salt.length + encrypted.length];
+            System.arraycopy(MAGIC_ARGON2ID, 0, output, 0, MAGIC_ARGON2ID.length);
+            System.arraycopy(salt, 0, output, MAGIC_ARGON2ID.length, salt.length);
+            System.arraycopy(encrypted, 0, output, MAGIC_ARGON2ID.length + salt.length, encrypted.length);
+            Files.write(file, output);
             log.info("Đã lưu {} → {}", ticketName, file);
-        } catch (Exception e) {
-            log.error("Lỗi khi lưu ticket", e);
         } finally {
             if (key != null) {
                 Arrays.fill(key, (byte) 0);
+            }
+            if (salt != null) {
+                Arrays.fill(salt, (byte) 0);
+            }
+            if (encrypted != null) {
+                Arrays.fill(encrypted, (byte) 0);
+            }
+            if (output != null) {
+                Arrays.fill(output, (byte) 0);
             }
         }
     }
@@ -65,10 +81,19 @@ public class TicketCache {
                 return null;
             }
 
-            byte[] salt = Arrays.copyOfRange(fileData, 0, CryptoConstants.PBKDF2_SALT_SIZE);
-            byte[] encrypted = Arrays.copyOfRange(fileData, CryptoConstants.PBKDF2_SALT_SIZE, fileData.length);
-
-            key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
+            int offset;
+            byte[] salt;
+            byte[] encrypted;
+            if (hasMagic(fileData)) {
+                offset = MAGIC_ARGON2ID.length;
+                salt = Arrays.copyOfRange(fileData, offset, offset + CryptoConstants.ARGON2ID_SALT_SIZE);
+                encrypted = Arrays.copyOfRange(fileData, offset + CryptoConstants.ARGON2ID_SALT_SIZE, fileData.length);
+                key = Argon2idKeyDerivation.deriveDbKey(password, salt);
+            } else {
+                salt = Arrays.copyOfRange(fileData, 0, CryptoConstants.PBKDF2_SALT_SIZE);
+                encrypted = Arrays.copyOfRange(fileData, CryptoConstants.PBKDF2_SALT_SIZE, fileData.length);
+                key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
+            }
             return AesGcmCipher.decrypt(key, encrypted);
         } catch (Exception e) {
             log.error("Lỗi khi đọc ticket", e);
@@ -127,5 +152,17 @@ public class TicketCache {
                 Arrays.fill(key, (byte) 0);
             }
         }
+    }
+
+    private static boolean hasMagic(byte[] fileData) {
+        if (fileData.length < MAGIC_ARGON2ID.length + CryptoConstants.ARGON2ID_SALT_SIZE) {
+            return false;
+        }
+        for (int i = 0; i < MAGIC_ARGON2ID.length; i++) {
+            if (fileData[i] != MAGIC_ARGON2ID[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 }

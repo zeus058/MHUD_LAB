@@ -37,9 +37,18 @@ public final class UiStyles {
         UIManager.put("Label.foreground", UIConstants.TEXT_SILVER);
         UIManager.put("OptionPane.background", UIConstants.DEEP_CARBON);
         UIManager.put("OptionPane.messageForeground", UIConstants.TEXT_SILVER);
+        UIManager.put("TextField.caretForeground", UIConstants.SECURE_TEAL);
+        UIManager.put("PasswordField.caretForeground", UIConstants.SECURE_TEAL);
     }
 
     public static JLabel titleLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(UIConstants.FONT_PAGE_TITLE);
+        label.setForeground(UIConstants.TEXT_WHITE);
+        return label;
+    }
+
+    public static JLabel appTitleLabel(String text) {
         JLabel label = new JLabel(text);
         label.setFont(UIConstants.FONT_TITLE);
         label.setForeground(UIConstants.TEXT_WHITE);
@@ -83,6 +92,8 @@ public final class UiStyles {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(bg);
                 g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                g2.setColor(UIConstants.OUTLINE);
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 g2.dispose();
                 super.paintComponent(g);
             }
@@ -121,8 +132,10 @@ public final class UiStyles {
     private static void styleInput(JTextField field) {
         field.setFont(UIConstants.FONT_BODY);
         field.setForeground(UIConstants.TEXT_WHITE);
-        field.setBackground(UIConstants.DARK_SILVER);
+        field.setBackground(UIConstants.INPUT_BG);
         field.setCaretColor(UIConstants.SECURE_TEAL);
+        field.setSelectionColor(UIConstants.SECURE_TEAL);
+        field.setSelectedTextColor(UIConstants.TEXT_WHITE);
         field.setBorder(BorderFactory.createCompoundBorder(
                 focusBorder(false),
                 new EmptyBorder(10, 12, 10, 12)));
@@ -152,7 +165,7 @@ public final class UiStyles {
     }
 
     public static JButton ghostButton(String text) {
-        return styledButton(text, UIConstants.DARK_SILVER, UIConstants.TEXT_SILVER, false);
+        return styledButton(text, UIConstants.SURFACE_HIGH, UIConstants.TEXT_SILVER, false);
     }
 
     public static JButton linkButton(String text) {
@@ -175,6 +188,11 @@ public final class UiStyles {
                 if (filled) {
                     g2.setColor(bg);
                     g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                } else {
+                    g2.setColor(UIConstants.SURFACE_HIGH);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    g2.setColor(UIConstants.OUTLINE);
+                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 }
                 g2.dispose();
                 super.paintComponent(g);
@@ -182,10 +200,10 @@ public final class UiStyles {
         };
         button.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
         button.setForeground(fg);
-        button.setBackground(filled ? bg : UIConstants.DARK_SILVER);
+        button.setBackground(filled ? bg : UIConstants.SURFACE_HIGH);
         button.setFocusPainted(false);
         button.setBorderPainted(false);
-        button.setContentAreaFilled(!filled);
+        button.setContentAreaFilled(false);
         button.setOpaque(false);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         button.setPreferredSize(new Dimension(0, 42));
@@ -194,9 +212,10 @@ public final class UiStyles {
     }
 
     public static RoundedPanel cardPanel() {
-        RoundedPanel panel = new RoundedPanel(UIConstants.DARK_SILVER, UIConstants.CORNER_RADIUS);
-        panel.setBorder(new EmptyBorder(UIConstants.PADDING, UIConstants.PADDING,
-                UIConstants.PADDING, UIConstants.PADDING));
+        RoundedPanel panel = new RoundedPanel(UIConstants.CARD_BG, UIConstants.CORNER_RADIUS);
+        panel.setBorder(BorderFactory.createCompoundBorder(
+                new RoundedLineBorder(UIConstants.OUTLINE, 1, UIConstants.CORNER_RADIUS),
+                new EmptyBorder(28, 28, 28, 28)));
         return panel;
     }
 
@@ -216,7 +235,7 @@ public final class UiStyles {
 
     public static Border focusBorder(boolean focused) {
         return new RoundedLineBorder(
-                focused ? UIConstants.SECURE_TEAL : UIConstants.DARK_SILVER,
+                focused ? UIConstants.SECURE_TEAL : UIConstants.BORDER_SUBTLE,
                 focused ? 2 : 1,
                 UIConstants.CORNER_RADIUS_SM);
     }

@@ -23,9 +23,7 @@ public final class ClientStoragePaths {
         return clientRoot().resolve(sanitizeUsername(username));
     }
 
-    /**
-     * File {@code chat.db}: bytes 0–31 chứa salt PBKDF2 (Contrains.md §3.3).
-     */
+    /** File salt Argon2id 32 bytes cho khóa mã hóa nội dung cục bộ. */
     public static Path chatDbSaltFile(String username) {
         return userDir(username).resolve("chat.db");
     }
@@ -39,12 +37,25 @@ public final class ClientStoragePaths {
         return userDir(username).resolve("keystore.p12");
     }
 
-    /**
-     * Vé Kerberos mã hóa: [salt 32 bytes][ciphertext] (Contrains.md §3.3).
-     */
+    /** Vé Kerberos mã hóa: ["SC2A"][salt Argon2id 32 bytes][ciphertext]. */
     public static Path ticketCacheFile(String username, String ticketName) {
         String safe = ticketName.replace("/", "_").replace("\\", "_");
         return userDir(username).resolve("tickets_" + safe + ".cache");
+    }
+
+    /** Kho private Pre-Key E2EE, được mã hóa bằng khóa dẫn xuất từ mật khẩu. */
+    public static Path preKeyStoreFile(String username) {
+        return userDir(username).resolve("e2ee_prekeys.bin");
+    }
+
+    /** Salt Argon2id riêng cho kho private Pre-Key E2EE. */
+    public static Path preKeyStoreSaltFile(String username) {
+        return userDir(username).resolve("e2ee_prekeys.salt");
+    }
+
+    /** Danh sách session Double Ratchet E2EE, được mã hóa bằng khóa dẫn xuất từ mật khẩu. */
+    public static Path e2eeSessionsFile(String username) {
+        return userDir(username).resolve("e2ee_sessions.bin");
     }
 
     public static void ensureUserDir(String username) throws IOException {

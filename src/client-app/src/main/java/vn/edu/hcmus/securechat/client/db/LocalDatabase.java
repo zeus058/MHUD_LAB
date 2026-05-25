@@ -18,12 +18,12 @@ import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
+import vn.edu.hcmus.securechat.common.crypto.Argon2idKeyDerivation;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
-import vn.edu.hcmus.securechat.common.crypto.Pbkdf2KeyDerivation;
 import vn.edu.hcmus.securechat.common.exception.KeyDerivationException;
 
 /**
- * CSDL SQLite cục bộ — tin nhắn mã hóa tĩnh bằng khóa PBKDF2 (Contrains.md §3.3–3.4).
+ * CSDL SQLite cục bộ — tin nhắn mã hóa tĩnh bằng khóa Argon2id (BaoCao_NangCap.md v2.0).
  */
 public class LocalDatabase {
     private static final Logger log = LoggerFactory.getLogger(LocalDatabase.class);
@@ -42,14 +42,14 @@ public class LocalDatabase {
     }
 
     /**
-     * Dẫn xuất khóa PBKDF2 từ password; salt đọc từ bytes 0–31 của {@code chat.db}.
+     * Dẫn xuất khóa Argon2id từ password; salt lưu riêng theo user.
      */
     public void unlockDatabase(char[] password) throws KeyDerivationException {
-        log.info("Dẫn xuất khóa PBKDF2 cho user={}", username);
+        log.info("Dẫn xuất khóa Argon2id cho user={}", username);
         try {
             ClientStoragePaths.ensureUserDir(username);
             byte[] salt = loadOrCreateSalt();
-            this.dbKey = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
+            this.dbKey = Argon2idKeyDerivation.deriveDbKey(password, salt);
             log.info("Mở khóa CSDL thành công: {}", ClientStoragePaths.messagesSqliteFile(username));
         } catch (KeyDerivationException e) {
             throw e;
@@ -155,13 +155,13 @@ public class LocalDatabase {
     }
 
     /**
-     * Salt PBKDF2: bytes 0–31 của {@code data/client/<user>/chat.db} (Contrains.md §3.3).
+     * Salt Argon2id: 32 bytes riêng cho từng user.
      */
     private byte[] loadOrCreateSalt() throws IOException {
-        if (Files.exists(saltDbFile) && Files.size(saltDbFile) >= CryptoConstants.PBKDF2_SALT_SIZE) {
+        if (Files.exists(saltDbFile) && Files.size(saltDbFile) >= CryptoConstants.ARGON2ID_SALT_SIZE) {
             byte[] fileBytes = Files.readAllBytes(saltDbFile);
-            if (fileBytes.length >= CryptoConstants.PBKDF2_SALT_SIZE) {
-                return Arrays.copyOf(fileBytes, CryptoConstants.PBKDF2_SALT_SIZE);
+            if (fileBytes.length >= CryptoConstants.ARGON2ID_SALT_SIZE) {
+                return Arrays.copyOf(fileBytes, CryptoConstants.ARGON2ID_SALT_SIZE);
             }
         }
 
@@ -171,7 +171,7 @@ public class LocalDatabase {
             return legacy;
         }
 
-        byte[] salt = new byte[CryptoConstants.PBKDF2_SALT_SIZE];
+        byte[] salt = new byte[CryptoConstants.ARGON2ID_SALT_SIZE];
         new SecureRandom().nextBytes(salt);
         Files.write(saltDbFile, salt);
         return salt;
@@ -182,7 +182,7 @@ public class LocalDatabase {
         try {
             if (Files.exists(legacySalt)) {
                 byte[] salt = Files.readAllBytes(legacySalt);
-                if (salt.length == CryptoConstants.PBKDF2_SALT_SIZE) {
+                if (salt.length == CryptoConstants.ARGON2ID_SALT_SIZE) {
                     log.info("Di chuyển salt cũ sang {}", saltDbFile);
                     return salt;
                 }

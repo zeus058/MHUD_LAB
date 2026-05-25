@@ -70,8 +70,10 @@ class HybridEncryptionTest {
         byte[] ciphertext = HybridEncryption.encrypt(rsaKeyPair.getPublic(), plaintext);
 
         // Tamper with the AES-GCM part (after the RSA-encrypted DEK)
-        int dekLen = ((ciphertext[0] & 0xFF) << 8) | (ciphertext[1] & 0xFF);
-        int tamperIdx = 2 + dekLen + 5; // somewhere in the AES-GCM payload
+        int offset = ciphertext[0] == 'S' && ciphertext[1] == 'C'
+                && ciphertext[2] == 'H' && ciphertext[3] == '2' ? 5 : 0;
+        int dekLen = ((ciphertext[offset] & 0xFF) << 8) | (ciphertext[offset + 1] & 0xFF);
+        int tamperIdx = offset + 2 + dekLen + 5; // somewhere in the AES-GCM payload
         if (tamperIdx < ciphertext.length) {
             ciphertext[tamperIdx] ^= (byte) 0xFF;
         }
@@ -90,6 +92,29 @@ class HybridEncryptionTest {
         assertThrows(CryptoException.class, () ->
             HybridEncryption.decrypt(otherKeyPair.getPrivate(), ciphertext)
         );
+    }
+
+    @Test
+    void testWindowsKeyStoreCompatRoundtrip() throws CryptoException {
+        byte[] plaintext = "Ticket for Windows-MY private key".getBytes(StandardCharsets.UTF_8);
+
+        byte[] ciphertext = HybridEncryption.encryptForWindowsKeyStoreRecipient(
+                rsaKeyPair.getPublic(), plaintext);
+        byte[] decrypted = HybridEncryption.decrypt(rsaKeyPair.getPrivate(), ciphertext);
+
+        assertArrayEquals(plaintext, decrypted);
+    }
+
+    @Test
+    void testAadContextIsAuthenticated() throws CryptoException {
+        byte[] plaintext = "Context-bound ticket".getBytes(StandardCharsets.UTF_8);
+        byte[] context = "TGT|securechat-v2".getBytes(StandardCharsets.UTF_8);
+        byte[] wrongContext = "ST|securechat-v2".getBytes(StandardCharsets.UTF_8);
+
+        byte[] ciphertext = HybridEncryption.encrypt(rsaKeyPair.getPublic(), plaintext, context);
+
+        assertThrows(CryptoException.class, () ->
+                HybridEncryption.decrypt(rsaKeyPair.getPrivate(), ciphertext, wrongContext));
     }
 
     @Test

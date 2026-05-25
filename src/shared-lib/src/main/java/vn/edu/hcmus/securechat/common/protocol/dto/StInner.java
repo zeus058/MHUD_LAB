@@ -12,10 +12,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *   "issuedAt":     1715000000,
  *   "expiresAt":    1715028800,
  *   "sessionKey":   "string — base64(K_A_Chat, 32 bytes)",
- *   "cv":           "string — ENCRYPT_ONLY|CHAT_SERVICE|8H_EXPIRY"
+ *   "cv":           "string — AUTH_ONLY|CHAT_SERVICE|8H_EXPIRY|NO_CONTENT_DECRYPT|DERIVATION_PROHIBITED"
  * }
  */
 public class StInner {
+
+    @JsonProperty("stId")
+    private String stId;
 
     @JsonProperty("clientId")
     private String clientId;
@@ -38,6 +41,9 @@ public class StInner {
     @JsonProperty("cv")
     private String cv;
 
+    @JsonProperty("clientCertSerial")
+    private String clientCertSerial;
+
     public StInner() {}
 
     public StInner(String clientId, String clientPubKey, String targetServer,
@@ -50,6 +56,23 @@ public class StInner {
         this.sessionKey = sessionKey;
         this.cv = cv;
     }
+
+    public StInner(String stId, String clientId, String clientPubKey, String targetServer,
+                   long issuedAt, long expiresAt, String sessionKey, String cv,
+                   String clientCertSerial) {
+        this.stId = stId;
+        this.clientId = clientId;
+        this.clientPubKey = clientPubKey;
+        this.targetServer = targetServer;
+        this.issuedAt = issuedAt;
+        this.expiresAt = expiresAt;
+        this.sessionKey = sessionKey;
+        this.cv = cv;
+        this.clientCertSerial = clientCertSerial;
+    }
+
+    public String getStId() { return stId; }
+    public void setStId(String stId) { this.stId = stId; }
 
     public String getClientId() { return clientId; }
     public void setClientId(String clientId) { this.clientId = clientId; }
@@ -71,4 +94,7 @@ public class StInner {
 
     public String getCv() { return cv; }
     public void setCv(String cv) { this.cv = cv; }
+
+    public String getClientCertSerial() { return clientCertSerial; }
+    public void setClientCertSerial(String clientCertSerial) { this.clientCertSerial = clientCertSerial; }
 }
