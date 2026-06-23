@@ -93,7 +93,7 @@ public final class UiStyles {
                 g2.setColor(bg);
                 g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 g2.setColor(UIConstants.OUTLINE);
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 g2.dispose();
                 super.paintComponent(g);
             }
@@ -106,15 +106,83 @@ public final class UiStyles {
     }
 
     public static JTextField styledTextField(int columns) {
-        JTextField field = new JTextField(columns);
+        JTextField field = new PlaceholderTextField(columns);
         styleInput(field);
         return field;
     }
 
     public static JPasswordField styledPasswordField(int columns) {
-        JPasswordField field = new JPasswordField(columns);
+        JPasswordField field = new PlaceholderPasswordField(columns);
         styleInput(field);
         return field;
+    }
+
+    public static void setPlaceholder(JTextField field, String placeholder) {
+        if (field instanceof PlaceholderTextField) {
+            ((PlaceholderTextField) field).setPlaceholder(placeholder);
+        } else if (field instanceof PlaceholderPasswordField) {
+            ((PlaceholderPasswordField) field).setPlaceholder(placeholder);
+        }
+    }
+
+    public static class PlaceholderTextField extends JTextField {
+        private String placeholder;
+
+        public PlaceholderTextField(int columns) {
+            super(columns);
+        }
+
+        public void setPlaceholder(String placeholder) {
+            this.placeholder = placeholder;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (placeholder != null && !placeholder.isEmpty() && getText().isEmpty()) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(UIConstants.TEXT_MUTED);
+                g2.setFont(getFont());
+                Insets insets = getInsets();
+                int x = insets.left;
+                java.awt.FontMetrics fm = g2.getFontMetrics();
+                int y = (getHeight() - fm.getHeight()) / 2 + fm.getAscent();
+                g2.drawString(placeholder, x, y);
+                g2.dispose();
+            }
+        }
+    }
+
+    public static class PlaceholderPasswordField extends JPasswordField {
+        private String placeholder;
+
+        public PlaceholderPasswordField(int columns) {
+            super(columns);
+        }
+
+        public void setPlaceholder(String placeholder) {
+            this.placeholder = placeholder;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (placeholder != null && !placeholder.isEmpty() && getPassword().length == 0) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(UIConstants.TEXT_MUTED);
+                g2.setFont(getFont());
+                Insets insets = getInsets();
+                int x = insets.left;
+                java.awt.FontMetrics fm = g2.getFontMetrics();
+                int y = (getHeight() - fm.getHeight()) / 2 + fm.getAscent();
+                g2.drawString(placeholder, x, y);
+                g2.dispose();
+            }
+        }
     }
 
     public static JTextArea styledTextArea(int rows, int columns) {
@@ -192,7 +260,7 @@ public final class UiStyles {
                     g2.setColor(UIConstants.SURFACE_HIGH);
                     g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                     g2.setColor(UIConstants.OUTLINE);
-                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 }
                 g2.dispose();
                 super.paintComponent(g);

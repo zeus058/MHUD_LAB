@@ -15,9 +15,6 @@ public class E2eeInitMessage {
     @JsonProperty("ephemeralEcdhPubKey")
     private String ephemeralEcdhPubKey;
 
-    @JsonProperty("kyberCiphertext")
-    private String kyberCiphertext;
-
     @JsonProperty("nonce")
     private String nonce;
 
@@ -30,17 +27,11 @@ public class E2eeInitMessage {
     @JsonProperty("senderCertEcdsa")
     private String senderCertEcdsa;
 
-    @JsonProperty("senderCertDilithium")
-    private String senderCertDilithium;
-
     @JsonProperty("transcriptHash")
     private String transcriptHash;
 
     @JsonProperty("signatureEcdsa")
     private String signatureEcdsa;
-
-    @JsonProperty("signatureDilithium")
-    private String signatureDilithium;
 
     public E2eeInitMessage() {}
 
@@ -56,9 +47,6 @@ public class E2eeInitMessage {
     public String getEphemeralEcdhPubKey() { return ephemeralEcdhPubKey; }
     public void setEphemeralEcdhPubKey(String ephemeralEcdhPubKey) { this.ephemeralEcdhPubKey = ephemeralEcdhPubKey; }
 
-    public String getKyberCiphertext() { return kyberCiphertext; }
-    public void setKyberCiphertext(String kyberCiphertext) { this.kyberCiphertext = kyberCiphertext; }
-
     public String getNonce() { return nonce; }
     public void setNonce(String nonce) { this.nonce = nonce; }
 
@@ -71,15 +59,9 @@ public class E2eeInitMessage {
     public String getSenderCertEcdsa() { return senderCertEcdsa; }
     public void setSenderCertEcdsa(String senderCertEcdsa) { this.senderCertEcdsa = senderCertEcdsa; }
 
-    public String getSenderCertDilithium() { return senderCertDilithium; }
-    public void setSenderCertDilithium(String senderCertDilithium) { this.senderCertDilithium = senderCertDilithium; }
-
     public String getTranscriptHash() { return transcriptHash; }
     public void setTranscriptHash(String transcriptHash) { this.transcriptHash = transcriptHash; }
 
     public String getSignatureEcdsa() { return signatureEcdsa; }
     public void setSignatureEcdsa(String signatureEcdsa) { this.signatureEcdsa = signatureEcdsa; }
-
-    public String getSignatureDilithium() { return signatureDilithium; }
-    public void setSignatureDilithium(String signatureDilithium) { this.signatureDilithium = signatureDilithium; }
 }

@@ -29,8 +29,16 @@ public final class UIConstants {
     public static final Color SURFACE_HIGH = Color.decode("#232B33");
     public static final Color OUTLINE = Color.decode("#3D4948");
 
-    public static final int CORNER_RADIUS = 8;
+    // Glassmorphism (RGBA Colors)
+    public static final Color GLASS_CARD    = new Color(36, 47, 56, 90);    // ~35% alpha
+    public static final Color GLASS_BORDER  = new Color(255, 255, 255, 20);  // ~8% alpha
+    public static final Color GLASS_SIDEBAR = new Color(12, 20, 28, 115);   // ~45% alpha
+    public static final Color ACCENT_DIM    = new Color(0, 161, 156, 38);    // ~15% alpha
+    public static final Color ACCENT_GLOW   = new Color(0, 161, 156, 102);   // ~40% alpha
+
+    public static final int CORNER_RADIUS = 12;
     public static final int CORNER_RADIUS_SM = 8;
+    public static final int CORNER_RADIUS_LG = 20;
     public static final int PADDING = 16;
     public static final int PADDING_SM = 10;
 

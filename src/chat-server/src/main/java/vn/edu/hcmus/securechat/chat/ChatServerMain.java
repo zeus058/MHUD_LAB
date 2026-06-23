@@ -29,7 +29,6 @@ import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.EcdheService;
 import vn.edu.hcmus.securechat.common.crypto.HkdfKeyDerivation;
 import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
-import vn.edu.hcmus.securechat.common.crypto.KyberKemService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.common.exception.ControlVectorException;
 import vn.edu.hcmus.securechat.common.exception.CryptoException;
@@ -82,7 +81,6 @@ public class ChatServerMain {
 
     private ChatKeyManager keyManager;
     private OcspStaplingManager ocspManager;
-    private KeyPair serverKyberPair;
     private byte[] ticketServerKey;
 
     public ChatServerMain() {
@@ -114,9 +112,6 @@ public class ChatServerMain {
             ocspManager = new OcspStaplingManager(serialHex, issuerDn);
             ocspManager.start();
 
-            // 3. Initialize ML-KEM-768 KeyPair
-            serverKyberPair = KyberKemService.generateKeyPair();
-            log.info("ML-KEM-768 key pair generated for Chat Server");
 
             ticketServerKey = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
             new SecureRandom().nextBytes(ticketServerKey);
@@ -206,7 +201,7 @@ public class ChatServerMain {
             AuthenticatorJson auth = parseAuthenticator(request, ticketSessionKey);
             validateAuthenticator(serviceTicket, auth);
 
-            // ECDHE + Kyber Handshake
+            // ECDHE Handshake
             ecdhePair = EcdheService.generateKeyPair();
             masterSessionKey = deriveMasterKeyIfPresent(request, ticketSessionKey, ecdhePair);
             
@@ -608,28 +603,22 @@ public class ChatServerMain {
 
     private byte[] deriveMasterKeyIfPresent(ChatHandshakeRequest request, byte[] ticketSessionKey, KeyPair ecdhePair)
             throws CryptoException, ProtocolException {
-        if (isBlank(request.getEcdhePubKey()) || isBlank(request.getKyberCiphertext()) || isBlank(request.getSessionNonce())) {
+        if (isBlank(request.getEcdhePubKey()) || isBlank(request.getSessionNonce())) {
             return ticketSessionKey;
         }
 
         byte[] ssEcdhe = null;
-        byte[] ssKyber = null;
         byte[] sessionNonce = null;
         try {
             // 1. Calculate ECDHE shared secret
             PublicKey clientEcdhePubKey = EcdheService.decodePublicKey(request.getEcdhePubKey());
             ssEcdhe = EcdheService.computeSharedSecret(ecdhePair.getPrivate(), clientEcdhePubKey);
             
-            // 2. Decapsulate Kyber shared secret
-            byte[] kyberCiphertext = decodeRequired(request.getKyberCiphertext(), "kyberCiphertext");
-            ssKyber = KyberKemService.decapsulate(serverKyberPair.getPrivate(), kyberCiphertext);
-            
-            // 3. Derive master key
+            // 2. Derive master key
             sessionNonce = decodeRequired(request.getSessionNonce(), "sessionNonce");
-            return HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, sessionNonce);
+            return HkdfKeyDerivation.deriveSessionKey(ssEcdhe, sessionNonce);
         } finally {
             zero(ssEcdhe);
-            zero(ssKyber);
             zero(sessionNonce);
         }
     }

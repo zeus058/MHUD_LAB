@@ -37,11 +37,9 @@ import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
 import vn.edu.hcmus.securechat.common.crypto.Argon2idKeyDerivation;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
-import vn.edu.hcmus.securechat.common.crypto.DilithiumSignatureService;
 import vn.edu.hcmus.securechat.common.crypto.DoubleRatchetSession;
 import vn.edu.hcmus.securechat.common.crypto.EcdheService;
 import vn.edu.hcmus.securechat.common.crypto.HkdfKeyDerivation;
-import vn.edu.hcmus.securechat.common.crypto.KyberKemService;
 import vn.edu.hcmus.securechat.common.exception.CryptoException;
 import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
@@ -61,7 +59,7 @@ import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
  * Client-side secure session service.
  *
  * The Kerberos ST authenticates access to Chat Server. Message content is then
- * protected by client-to-client Pre-Key + ECDHE + ML-KEM + Double Ratchet.
+ * protected by client-to-client Pre-Key + ECDHE + Double Ratchet.
  */
 public class E2eeCryptoService {
     private static final Logger log = LoggerFactory.getLogger(E2eeCryptoService.class);
@@ -97,11 +95,7 @@ public class E2eeCryptoService {
     private String identityCertBase64;
     private int signedPreKeyId;
     private KeyPair signedPreKeyEcdh;
-    private KeyPair signedPreKeyKyber;
     private String signedPreKeyEcdhPub;
-    private String signedPreKeyKyberPub;
-    private DilithiumSignatureService.DilithiumKeyPair dilithiumKeyPair;
-    private String dilithiumPublicKeyBase64;
     private PreKeyBundle localPreKeyBundle;
     private Path preKeyStoreFile;
     private byte[] preKeyStoreKey;
@@ -156,7 +150,7 @@ public class E2eeCryptoService {
             this.currentUsername = username;
             this.masterSessionKey = Arrays.copyOf(sessionKey, sessionKey.length);
             ChatHandshakeRequest payload = new ChatHandshakeRequest(
-                    stBase64, authenticatorB64, null, null, null);
+                    stBase64, authenticatorB64, null, null);
 
             chatSocket = new Socket(ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
             chatSocket.setSoTimeout(ServerConfig.READ_TIMEOUT_MS);
@@ -260,26 +254,17 @@ public class E2eeCryptoService {
 
         PreKeyMaterial material = selectLocalPreKey(init.getUsedOneTimePreKeyId());
         byte[] ssEcdhe = null;
-        byte[] ssKyber = null;
         byte[] conversationKey = null;
         byte[] salt = null;
-        byte[] kyberCiphertext = null;
         try {
-            String transcript = buildInitTranscript(init, material.ecdhPubKey(), material.kyberPubKey());
+            String transcript = buildInitTranscript(init, material.ecdhPubKey());
             verifyTranscriptHash(init, transcript);
             verifySignatureFromCertificate(init.getSenderCertEcdsa(), transcript, init.getSignatureEcdsa());
-            if (!isBlank(init.getSenderCertDilithium()) && !isBlank(init.getSignatureDilithium())) {
-                verifyDilithiumSignature(init.getSenderCertDilithium(), transcript, init.getSignatureDilithium());
-            }
 
             PublicKey senderEcdhPub = EcdheService.decodePublicKey(init.getEphemeralEcdhPubKey());
             ssEcdhe = EcdheService.computeSharedSecret(material.ecdhPair().getPrivate(), senderEcdhPub);
-            kyberCiphertext = Base64.getDecoder().decode(init.getKyberCiphertext());
-            ssKyber = KyberKemService.decapsulate(
-                    material.kyberPair().getPrivate(),
-                    kyberCiphertext);
             salt = conversationSalt(init.getConversationId(), init.getNonce());
-            conversationKey = HkdfKeyDerivation.deriveConversationKey(ssEcdhe, ssKyber, salt);
+            conversationKey = HkdfKeyDerivation.deriveConversationKey(ssEcdhe, salt);
 
             DoubleRatchetSession session = new DoubleRatchetSession(
                     init.getConversationId(),
@@ -297,14 +282,12 @@ public class E2eeCryptoService {
                         + " được dùng đúng một lần cho @" + init.getSenderId() + ".", ActivityTone.SUCCESS);
                 savePreKeyStoreQuietly();
             }
-            fire("E2EE Init hợp lệ", "Đã xác minh transcript, giải ML-KEM và mở Double Ratchet với @"
+            fire("E2EE Init hợp lệ", "Đã xác minh transcript và mở Double Ratchet với @"
                     + init.getSenderId() + ".", ActivityTone.SUCCESS);
         } finally {
             zero(ssEcdhe);
-            zero(ssKyber);
             zero(conversationKey);
             zero(salt);
-            zero(kyberCiphertext);
         }
     }
 
@@ -326,12 +309,12 @@ public class E2eeCryptoService {
     }
 
     public void sendFrame(byte type, byte[] payload) throws IOException {
-        Socket socket = chatSocket;
-        if (socket == null || socket.isClosed()) {
+        Socket chatSocketRef = chatSocket;
+        if (chatSocketRef == null || chatSocketRef.isClosed()) {
             throw new IOException("Chat socket is not connected");
         }
         synchronized (writeLock) {
-            PacketFrame.write(socket.getOutputStream(), type, payload);
+            PacketFrame.write(chatSocketRef.getOutputStream(), type, payload);
         }
     }
 
@@ -345,15 +328,13 @@ public class E2eeCryptoService {
         sessionsByConversation.clear();
         oneTimePreKeyPrivate.clear();
         localPreKeyBundle = null;
-        if (dilithiumKeyPair != null) {
-            dilithiumKeyPair.destroyPrivateKey();
-        }
         zero(masterSessionKey);
         zero(preKeyStoreKey);
         preKeyStoreKey = null;
-        if (chatSocket != null && !chatSocket.isClosed()) {
+        Socket chatSocketRef = chatSocket;
+        if (chatSocketRef != null && !chatSocketRef.isClosed()) {
             try {
-                chatSocket.close();
+                chatSocketRef.close();
             } catch (IOException ignored) {
                 // Nothing to do during UI logout.
             }
@@ -382,43 +363,33 @@ public class E2eeCryptoService {
         oneTimePreKeyPrivate.clear();
         this.signedPreKeyId = preKeyIdSequence.getAndIncrement();
         this.signedPreKeyEcdh = EcdheService.generateKeyPair();
-        this.signedPreKeyKyber = KyberKemService.generateKeyPair();
         this.signedPreKeyEcdhPub = EcdheService.encodePublicKey(signedPreKeyEcdh.getPublic());
-        this.signedPreKeyKyberPub = KyberKemService.encodePublicKey(signedPreKeyKyber.getPublic());
-        this.dilithiumKeyPair = DilithiumSignatureService.generateKeyPair();
-        this.dilithiumPublicKeyBase64 = dilithiumKeyPair.publicKeyBase64();
 
         List<OneTimePreKey> opks = new ArrayList<>();
         for (int i = 0; i < OPK_POOL_SIZE; i++) {
             int id = preKeyIdSequence.getAndIncrement();
             KeyPair opkEcdh = EcdheService.generateKeyPair();
-            KeyPair opkKyber = KyberKemService.generateKeyPair();
             String ecdhPub = EcdheService.encodePublicKey(opkEcdh.getPublic());
-            String kyberPub = KyberKemService.encodePublicKey(opkKyber.getPublic());
-            oneTimePreKeyPrivate.put(id, new PreKeyMaterial(id, opkEcdh, opkKyber, ecdhPub, kyberPub));
-            opks.add(new OneTimePreKey(id, ecdhPub, kyberPub));
+            oneTimePreKeyPrivate.put(id, new PreKeyMaterial(id, opkEcdh, ecdhPub));
+            opks.add(new OneTimePreKey(id, ecdhPub));
         }
 
         PreKeyBundle bundle = new PreKeyBundle();
         bundle.setOwnerId(username);
         bundle.setIdentityCertEcdsa(identityCertBase64);
-        bundle.setIdentityCertDilithium(dilithiumPublicKeyBase64);
         bundle.setSignedPreKeyId(signedPreKeyId);
         bundle.setSignedPreKeyEcdh(signedPreKeyEcdhPub);
-        bundle.setSignedPreKeyKyber(signedPreKeyKyberPub);
         bundle.setOneTimePreKeys(opks);
         bundle.setBundleTimestamp(Instant.now().getEpochSecond());
         bundle.setSignedPreKeySignatureEcdsa(signText(signedPreKeyTranscript(bundle)));
-        bundle.setSignedPreKeySignatureDilithium(signDilithium(signedPreKeyTranscript(bundle)));
         bundle.setBundleSignatureEcdsa(signText(bundleTranscript(bundle)));
-        bundle.setBundleSignatureDilithium(signDilithium(bundleTranscript(bundle)));
         bundle.setLastResort(false);
         localPreKeyBundle = bundle;
         savePreKeyStore();
 
         sendFrame(PacketFrame.TYPE_PREKEY_UPLOAD, JsonSerializer.toBytes(bundle));
         fire("Upload Pre-Key Bundle", "Đã công bố signed pre-key và " + OPK_POOL_SIZE
-                + " one-time pre-key kèm chữ ký RSA + Dilithium.", ActivityTone.SUCCESS);
+                + " one-time pre-key kèm chữ ký RSA.", ActivityTone.SUCCESS);
     }
 
     private void initializePreKeyStore(String username, char[] password) throws Exception {
@@ -468,7 +439,7 @@ public class E2eeCryptoService {
                 return false;
             }
             applyPreKeyStore(store);
-            return localPreKeyBundle != null && signedPreKeyEcdh != null && signedPreKeyKyber != null;
+            return localPreKeyBundle != null && signedPreKeyEcdh != null;
         } catch (Exception e) {
             log.warn("Could not load persisted pre-key store", e);
             fire("Không đọc được Pre-Key cũ", "Client sẽ sinh bundle mới; tin offline cũ có thể không mở được.",
@@ -486,13 +457,7 @@ public class E2eeCryptoService {
         }
         signedPreKeyId = store.signedPreKeyId;
         signedPreKeyEcdhPub = store.signedPreKeyEcdhPub;
-        signedPreKeyKyberPub = store.signedPreKeyKyberPub;
         signedPreKeyEcdh = decodeEcdhKeyPair(store.signedPreKeyEcdhPub, store.signedPreKeyEcdhPrivate);
-        signedPreKeyKyber = decodeKyberKeyPair(store.signedPreKeyKyberPub, store.signedPreKeyKyberPrivate);
-        dilithiumPublicKeyBase64 = store.dilithiumPublicKeyBase64;
-        byte[] dilithiumPublic = Base64.getDecoder().decode(store.dilithiumPublicKeyBase64);
-        byte[] dilithiumPrivate = Base64.getDecoder().decode(store.dilithiumPrivateKeyBase64);
-        dilithiumKeyPair = new DilithiumSignatureService.DilithiumKeyPair(dilithiumPublic, dilithiumPrivate);
 
         oneTimePreKeyPrivate.clear();
         int maxId = signedPreKeyId;
@@ -502,9 +467,8 @@ public class E2eeCryptoService {
                     continue;
                 }
                 KeyPair ecdh = decodeEcdhKeyPair(item.ecdhPubKey, item.ecdhPrivate);
-                KeyPair kyber = decodeKyberKeyPair(item.kyberPubKey, item.kyberPrivate);
                 oneTimePreKeyPrivate.put(item.id,
-                        new PreKeyMaterial(item.id, ecdh, kyber, item.ecdhPubKey, item.kyberPubKey));
+                        new PreKeyMaterial(item.id, ecdh, item.ecdhPubKey));
                 maxId = Math.max(maxId, item.id);
             }
         }
@@ -525,10 +489,6 @@ public class E2eeCryptoService {
         store.signedPreKeyId = signedPreKeyId;
         store.signedPreKeyEcdhPub = signedPreKeyEcdhPub;
         store.signedPreKeyEcdhPrivate = encodePrivateKey(signedPreKeyEcdh.getPrivate());
-        store.signedPreKeyKyberPub = signedPreKeyKyberPub;
-        store.signedPreKeyKyberPrivate = encodePrivateKey(signedPreKeyKyber.getPrivate());
-        store.dilithiumPublicKeyBase64 = dilithiumPublicKeyBase64;
-        store.dilithiumPrivateKeyBase64 = dilithiumKeyPair.privateKeyBase64();
         store.bundle = localPreKeyBundle;
         store.oneTimePreKeys = oneTimePreKeyPrivate.values().stream()
                 .sorted(Comparator.comparingInt(PreKeyMaterial::id))
@@ -537,8 +497,6 @@ public class E2eeCryptoService {
                     item.id = material.id();
                     item.ecdhPubKey = material.ecdhPubKey();
                     item.ecdhPrivate = encodePrivateKey(material.ecdhPair().getPrivate());
-                    item.kyberPubKey = material.kyberPubKey();
-                    item.kyberPrivate = encodePrivateKey(material.kyberPair().getPrivate());
                     return item;
                 })
                 .toList();
@@ -571,7 +529,7 @@ public class E2eeCryptoService {
         }
         List<OneTimePreKey> opks = oneTimePreKeyPrivate.values().stream()
                 .sorted(Comparator.comparingInt(PreKeyMaterial::id))
-                .map(material -> new OneTimePreKey(material.id(), material.ecdhPubKey(), material.kyberPubKey()))
+                .map(material -> new OneTimePreKey(material.id(), material.ecdhPubKey()))
                 .toList();
         localPreKeyBundle.setOneTimePreKeys(opks);
     }
@@ -584,38 +542,31 @@ public class E2eeCryptoService {
 
         SelectedPreKey selected = selectRemotePreKey(bundle);
         KeyPair localEcdh = EcdheService.generateKeyPair();
-        KyberKemService.EncapsulationResult kyber = null;
         byte[] ssEcdhe = null;
         byte[] conversationKey = null;
         byte[] salt = null;
         try {
             PublicKey remoteEcdh = EcdheService.decodePublicKey(selected.ecdhPubKey());
-            PublicKey remoteKyber = KyberKemService.decodePublicKey(selected.kyberPubKey());
             ssEcdhe = EcdheService.computeSharedSecret(localEcdh.getPrivate(), remoteEcdh);
-            kyber = KyberKemService.encapsulate(remoteKyber);
 
             String nonce = randomNonceBase64();
             String conversationId = conversationId(currentUsername, peerId, nonce);
             salt = conversationSalt(conversationId, nonce);
-            conversationKey = HkdfKeyDerivation.deriveConversationKey(
-                    ssEcdhe, kyber.sharedSecret(), salt);
+            conversationKey = HkdfKeyDerivation.deriveConversationKey(ssEcdhe, salt);
 
             E2eeInitMessage init = new E2eeInitMessage();
             init.setConversationId(conversationId);
             init.setSenderId(currentUsername);
             init.setRecipientId(peerId);
             init.setEphemeralEcdhPubKey(EcdheService.encodePublicKey(localEcdh.getPublic()));
-            init.setKyberCiphertext(Base64.getEncoder().encodeToString(kyber.ciphertext()));
             init.setNonce(nonce);
             init.setTimestamp(Instant.now().getEpochSecond());
             init.setUsedOneTimePreKeyId(selected.id());
             init.setSenderCertEcdsa(identityCertBase64);
-            init.setSenderCertDilithium(dilithiumPublicKeyBase64);
 
-            String transcript = buildInitTranscript(init, selected.ecdhPubKey(), selected.kyberPubKey());
+            String transcript = buildInitTranscript(init, selected.ecdhPubKey());
             init.setTranscriptHash(Base64.getEncoder().encodeToString(sha256(transcript)));
             init.setSignatureEcdsa(signText(transcript));
-            init.setSignatureDilithium(signDilithium(transcript));
 
             DoubleRatchetSession session = new DoubleRatchetSession(
                     conversationId,
@@ -627,15 +578,11 @@ public class E2eeCryptoService {
             sessionsByConversation.put(conversationId, session);
             saveSessions();
             sendFrame(PacketFrame.TYPE_E2EE_INIT, JsonSerializer.toBytes(init));
-            fire("E2EE Init đã gửi", "Transcript bao phủ ECDHE, ML-KEM ciphertext và pre-key đã chọn cho @"
+            fire("E2EE Init đã gửi", "Transcript bao phủ ECDHE và pre-key đã chọn cho @"
                     + peerId + ".", ActivityTone.SUCCESS);
             return session;
         } finally {
             zero(ssEcdhe);
-            if (kyber != null) {
-                zero(kyber.sharedSecret());
-                zero(kyber.ciphertext());
-            }
             zero(conversationKey);
             zero(salt);
         }
@@ -663,8 +610,7 @@ public class E2eeCryptoService {
             throw new ProtocolException("Pre-Key Bundle rỗng.");
         }
         if (isBlank(bundle.getIdentityCertEcdsa())
-                || isBlank(bundle.getSignedPreKeyEcdh())
-                || isBlank(bundle.getSignedPreKeyKyber())) {
+                || isBlank(bundle.getSignedPreKeyEcdh())) {
             throw new ProtocolException("Pre-Key Bundle thiếu khóa bắt buộc.");
         }
 
@@ -674,36 +620,23 @@ public class E2eeCryptoService {
                     bundleTranscript(bundle),
                     bundle.getBundleSignatureEcdsa());
         }
-        if (!isBlank(bundle.getIdentityCertDilithium()) && !isBlank(bundle.getBundleSignatureDilithium())) {
-            verifyDilithiumSignature(
-                    bundle.getIdentityCertDilithium(),
-                    bundleTranscript(bundle),
-                    bundle.getBundleSignatureDilithium());
-        }
         if (!isBlank(bundle.getSignedPreKeySignatureEcdsa())) {
             verifySignatureFromCertificate(
                     bundle.getIdentityCertEcdsa(),
                     signedPreKeyTranscript(bundle),
                     bundle.getSignedPreKeySignatureEcdsa());
         }
-        if (!isBlank(bundle.getIdentityCertDilithium()) && !isBlank(bundle.getSignedPreKeySignatureDilithium())) {
-            verifyDilithiumSignature(
-                    bundle.getIdentityCertDilithium(),
-                    signedPreKeyTranscript(bundle),
-                    bundle.getSignedPreKeySignatureDilithium());
-        }
-        fire("Xác minh Pre-Key", "Chữ ký X.509 và Dilithium của bundle @" + bundle.getOwnerId()
+        fire("Xác minh Pre-Key", "Chữ ký X.509 của bundle @" + bundle.getOwnerId()
                 + " hợp lệ; server không được xem là nguồn tin cậy cuối.", ActivityTone.SUCCESS);
     }
 
     private SelectedPreKey selectRemotePreKey(PreKeyBundle bundle) {
         if (bundle.getOneTimePreKeys() != null && !bundle.getOneTimePreKeys().isEmpty()) {
             OneTimePreKey opk = bundle.getOneTimePreKeys().get(0);
-            return new SelectedPreKey(opk.getId(), opk.getEcdhPubKey(), opk.getKyberPubKey());
+            return new SelectedPreKey(opk.getId(), opk.getEcdhPubKey());
         }
         return new SelectedPreKey(bundle.getSignedPreKeyId(),
-                bundle.getSignedPreKeyEcdh(),
-                bundle.getSignedPreKeyKyber());
+                bundle.getSignedPreKeyEcdh());
     }
 
     private PreKeyMaterial selectLocalPreKey(Integer usedOneTimePreKeyId) throws ProtocolException {
@@ -713,14 +646,12 @@ public class E2eeCryptoService {
                 return material;
             }
             if (usedOneTimePreKeyId == signedPreKeyId) {
-                return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyKyber,
-                        signedPreKeyEcdhPub, signedPreKeyKyberPub);
+                return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyEcdhPub);
             }
             throw new ProtocolException("One-time pre-key #" + usedOneTimePreKeyId + " không còn khả dụng.");
         }
-        if (signedPreKeyEcdh != null && signedPreKeyKyber != null) {
-            return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyKyber,
-                    signedPreKeyEcdhPub, signedPreKeyKyberPub);
+        if (signedPreKeyEcdh != null) {
+            return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyEcdhPub);
         }
         throw new ProtocolException("Không tìm thấy private pre-key để mở E2EE init.");
     }
@@ -731,7 +662,6 @@ public class E2eeCryptoService {
                 || isBlank(init.getSenderId())
                 || isBlank(init.getRecipientId())
                 || isBlank(init.getEphemeralEcdhPubKey())
-                || isBlank(init.getKyberCiphertext())
                 || isBlank(init.getNonce())
                 || isBlank(init.getTranscriptHash())
                 || isBlank(init.getSignatureEcdsa())) {
@@ -762,7 +692,6 @@ public class E2eeCryptoService {
                 safe(bundle.getIdentityCertEcdsa()),
                 String.valueOf(bundle.getSignedPreKeyId()),
                 safe(bundle.getSignedPreKeyEcdh()),
-                safe(bundle.getSignedPreKeyKyber()),
                 String.valueOf(bundle.getBundleTimestamp()));
     }
 
@@ -772,23 +701,20 @@ public class E2eeCryptoService {
                 safe(bundle.getOwnerId()),
                 String.valueOf(bundle.getSignedPreKeyId()),
                 safe(bundle.getSignedPreKeyEcdh()),
-                safe(bundle.getSignedPreKeyKyber()),
                 String.valueOf(bundle.getBundleTimestamp()));
     }
 
-    private String buildInitTranscript(E2eeInitMessage init, String selectedEcdhPubKey, String selectedKyberPubKey) {
+    private String buildInitTranscript(E2eeInitMessage init, String selectedEcdhPubKey) {
         return String.join("|",
                 "SecureChat-E2EE-Init-v2",
                 safe(init.getConversationId()),
                 safe(init.getSenderId()),
                 safe(init.getRecipientId()),
                 safe(init.getEphemeralEcdhPubKey()),
-                safe(init.getKyberCiphertext()),
                 safe(init.getNonce()),
                 String.valueOf(init.getTimestamp()),
                 String.valueOf(init.getUsedOneTimePreKeyId()),
-                safe(selectedEcdhPubKey),
-                safe(selectedKyberPubKey));
+                safe(selectedEcdhPubKey));
     }
 
     private String signText(String text) throws Exception {
@@ -796,21 +722,6 @@ public class E2eeCryptoService {
         signature.initSign(PkiManager.getPrivateKey());
         signature.update(text.getBytes(StandardCharsets.UTF_8));
         return Base64.getEncoder().encodeToString(signature.sign());
-    }
-
-    private String signDilithium(String text) throws CryptoException {
-        if (dilithiumKeyPair == null) {
-            return null;
-        }
-        byte[] signature = DilithiumSignatureService.sign(
-                dilithiumKeyPair.privateKey(),
-                dilithiumKeyPair.publicKey(),
-                text.getBytes(StandardCharsets.UTF_8));
-        try {
-            return Base64.getEncoder().encodeToString(signature);
-        } finally {
-            zero(signature);
-        }
     }
 
     private void verifySignatureFromCertificate(String certificateBase64, String text, String signatureBase64)
@@ -830,36 +741,11 @@ public class E2eeCryptoService {
         }
     }
 
-    private void verifyDilithiumSignature(String publicKeyBase64, String text, String signatureBase64)
-            throws CryptoException, ProtocolException {
-        byte[] publicKey = Base64.getDecoder().decode(publicKeyBase64);
-        byte[] signature = Base64.getDecoder().decode(signatureBase64);
-        try {
-            boolean ok = DilithiumSignatureService.verify(
-                    publicKey,
-                    text.getBytes(StandardCharsets.UTF_8),
-                    signature);
-            if (!ok) {
-                throw new ProtocolException("Chữ ký Dilithium không hợp lệ.");
-            }
-        } finally {
-            zero(publicKey);
-            zero(signature);
-        }
-    }
-
     private static KeyPair decodeEcdhKeyPair(String publicKeyBase64, String privateKeyBase64)
             throws CryptoException {
         return new KeyPair(
                 EcdheService.decodePublicKey(publicKeyBase64),
                 decodePrivateKey("EC", privateKeyBase64));
-    }
-
-    private static KeyPair decodeKyberKeyPair(String publicKeyBase64, String privateKeyBase64)
-            throws CryptoException {
-        return new KeyPair(
-                KyberKemService.decodePublicKey(publicKeyBase64),
-                decodePrivateKey("ML-KEM", privateKeyBase64));
     }
 
     private static PrivateKey decodePrivateKey(String algorithm, String privateKeyBase64)
@@ -954,10 +840,6 @@ public class E2eeCryptoService {
         public int signedPreKeyId;
         public String signedPreKeyEcdhPub;
         public String signedPreKeyEcdhPrivate;
-        public String signedPreKeyKyberPub;
-        public String signedPreKeyKyberPrivate;
-        public String dilithiumPublicKeyBase64;
-        public String dilithiumPrivateKeyBase64;
         public PreKeyBundle bundle;
         public List<PersistedOneTimePreKey> oneTimePreKeys = new ArrayList<>();
     }
@@ -966,18 +848,14 @@ public class E2eeCryptoService {
         public int id;
         public String ecdhPubKey;
         public String ecdhPrivate;
-        public String kyberPubKey;
-        public String kyberPrivate;
     }
 
-    private record SelectedPreKey(Integer id, String ecdhPubKey, String kyberPubKey) { }
+    private record SelectedPreKey(Integer id, String ecdhPubKey) { }
 
     private record PreKeyMaterial(
             int id,
             KeyPair ecdhPair,
-            KeyPair kyberPair,
-            String ecdhPubKey,
-            String kyberPubKey) { }
+            String ecdhPubKey) { }
 
     private void saveSessions() {
         if (currentUsername == null || preKeyStoreKey == null) {

@@ -18,7 +18,7 @@ public enum MessageType {
     TGT_RESPONSE(PacketFrame.TYPE_TGT_RESPONSE, "AS trả TGT + session key"),
     ST_REQUEST(PacketFrame.TYPE_ST_REQUEST, "Client xin ST từ TGS"),
     ST_RESPONSE(PacketFrame.TYPE_ST_RESPONSE, "TGS trả ST"),
-    CHAT_HANDSHAKE(PacketFrame.TYPE_CHAT_HANDSHAKE, "Handshake ECDHE + Kyber"),
+    CHAT_HANDSHAKE(PacketFrame.TYPE_CHAT_HANDSHAKE, "Handshake ECDHE"),
     CHAT_MESSAGE(PacketFrame.TYPE_CHAT_MESSAGE, "Tin nhắn đã mã hóa"),
     OCSP_REQUEST(PacketFrame.TYPE_OCSP_REQUEST, "Client xin OCSP status"),
     OCSP_RESPONSE(PacketFrame.TYPE_OCSP_RESPONSE, "Server trả OCSP response"),

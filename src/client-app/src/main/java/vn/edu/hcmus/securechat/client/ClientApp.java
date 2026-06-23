@@ -15,8 +15,6 @@ import javax.swing.UIManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import vn.edu.hcmus.securechat.client.model.SecurityState;
-import vn.edu.hcmus.securechat.client.model.SecurityState.ConnectionStatus;
 import vn.edu.hcmus.securechat.client.ui.ActivityFlowPanel;
 import vn.edu.hcmus.securechat.client.ui.ChatPanel;
 import vn.edu.hcmus.securechat.client.ui.LoginPanel;
@@ -91,7 +89,7 @@ public class ClientApp extends JFrame {
             @Override
             public void onRegisterSuccess(String username) {
                 JOptionPane.showMessageDialog(ClientApp.this,
-                        "Chứng chỉ đã được cấp cho @" + username + ".\nBạn có thể đăng nhập ngay.",
+                        "Tài khoản @" + username + " đã được tạo thành công.\nBạn có thể đăng nhập ngay.",
                         "Đăng ký thành công",
                         JOptionPane.INFORMATION_MESSAGE);
                 showLogin();
@@ -123,9 +121,6 @@ public class ClientApp extends JFrame {
      * Kết nối Kerberos + E2EE handshake trước khi vào màn chat.
      */
     private void connectInBackground(String username, char[] password) {
-        SecurityState connecting = new SecurityState();
-        connecting.setStatus(ConnectionStatus.CONNECTING);
-
         new SwingWorker<Object[], Void>() {
             @Override
             protected Object[] doInBackground() throws Exception {
@@ -184,12 +179,29 @@ public class ClientApp extends JFrame {
                     if (result != null && result[0] != null) {
                         showChat(username, (E2eeCryptoService) result[0], (vn.edu.hcmus.securechat.client.db.LocalDatabase) result[1]);
                     } else {
-                        loginPanel.showAuthError("Kết nối thất bại. Kiểm tra máy chủ và thử lại.");
+                        loginPanel.showAuthError("Kết nối thất bại. Vui lòng kiểm tra máy chủ và thử lại.");
                     }
                 } catch (Exception e) {
                     log.error("Connection failed", e);
-                    String message = e.getMessage() != null ? e.getMessage() : "Kết nối thất bại. Vui lòng thử lại.";
-                    loginPanel.showAuthError(message);
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    String message = cause.getMessage();
+                    
+                    String friendlyMessage = "Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin tài khoản hoặc kết nối mạng.";
+                    if (message != null) {
+                        String msgLower = message.toLowerCase();
+                        if (msgLower.contains("incorrect password") || msgLower.contains("mật khẩu không đúng") || msgLower.contains("invalid key") || msgLower.contains("decrypt") || msgLower.contains("argon2") || msgLower.contains("badpadding")) {
+                            friendlyMessage = "Mật khẩu không đúng. Vui lòng thử lại.";
+                        } else if (msgLower.contains("user not found") || msgLower.contains("không tìm thấy") || msgLower.contains("principal") || msgLower.contains("does not exist")) {
+                            friendlyMessage = "Tài khoản không tồn tại. Vui lòng kiểm tra lại.";
+                        } else if (msgLower.contains("refused") || msgLower.contains("connect") || msgLower.contains("timeout") || msgLower.contains("máy chủ")) {
+                            friendlyMessage = "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối mạng của bạn.";
+                        } else if (msgLower.contains("expired") || msgLower.contains("thời gian") || msgLower.contains("clock skew")) {
+                            friendlyMessage = "Thời gian trên máy tính không khớp hoặc yêu cầu hết hạn. Vui lòng thử lại.";
+                        } else if (msgLower.contains("lịch sử chat") || msgLower.contains("database")) {
+                            friendlyMessage = "Không thể mở lịch sử trò chuyện. Vui lòng kiểm tra mật khẩu.";
+                        }
+                    }
+                    loginPanel.showAuthError(friendlyMessage);
                 }
             }
         }.execute();

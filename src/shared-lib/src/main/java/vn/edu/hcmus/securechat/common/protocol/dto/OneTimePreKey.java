@@ -9,15 +9,11 @@ public class OneTimePreKey {
     @JsonProperty("ecdhPubKey")
     private String ecdhPubKey;
 
-    @JsonProperty("kyberPubKey")
-    private String kyberPubKey;
-
     public OneTimePreKey() {}
 
-    public OneTimePreKey(int id, String ecdhPubKey, String kyberPubKey) {
+    public OneTimePreKey(int id, String ecdhPubKey) {
         this.id = id;
         this.ecdhPubKey = ecdhPubKey;
-        this.kyberPubKey = kyberPubKey;
     }
 
     public int getId() { return id; }
@@ -25,7 +21,4 @@ public class OneTimePreKey {
 
     public String getEcdhPubKey() { return ecdhPubKey; }
     public void setEcdhPubKey(String ecdhPubKey) { this.ecdhPubKey = ecdhPubKey; }
-
-    public String getKyberPubKey() { return kyberPubKey; }
-    public void setKyberPubKey(String kyberPubKey) { this.kyberPubKey = kyberPubKey; }
 }

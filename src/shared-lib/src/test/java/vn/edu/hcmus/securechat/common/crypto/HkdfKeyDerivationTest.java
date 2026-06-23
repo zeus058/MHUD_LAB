@@ -31,11 +31,10 @@ class HkdfKeyDerivationTest {
     @Test
     void testDeriveSessionKey_matchesTestVector() throws Exception {
         byte[] ssEcdhe = hex.parseHex(testVectors.get("ss_ecdhe").asText());
-        byte[] ssKyber = hex.parseHex(testVectors.get("ss_kyber").asText());
         byte[] sessionNonce = hex.parseHex(testVectors.get("session_nonce").asText());
         byte[] expectedMasterKey = hex.parseHex(testVectors.get("expected_master_key").asText());
 
-        byte[] actualMasterKey = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, sessionNonce);
+        byte[] actualMasterKey = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, sessionNonce);
 
         assertNotNull(actualMasterKey);
         assertArrayEquals(expectedMasterKey, actualMasterKey, "Derived master key should match the precomputed test vector.");

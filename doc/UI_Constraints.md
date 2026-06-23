@@ -39,11 +39,22 @@ Màu chữ được thiết kế để vượt qua tiêu chuẩn tương phản 
     *   **Mã HEX:** `#E2E8F0`
     *   **Cách dùng:** Nội dung tin nhắn thông thường, nội dung đoạn văn, và chữ hiển thị trong cửa sổ nhật ký (logs).
 
+### 6. Màu Kính mờ & Viền gương (Glassmorphism & Mirror Effects)
+*   **Màu sắc 1:** GLASS_CARD (Nền kính mờ)
+    *   **Mã RGBA:** `rgba(36, 47, 56, 0.35)`
+    *   **Cách dùng:** Dùng cho các thẻ, panel biểu mẫu đăng nhập/đăng ký với độ trong suốt 35%.
+*   **Màu sắc 2:** GLASS_BORDER (Viền gương phản chiếu)
+    *   **Mã RGBA:** `rgba(255, 255, 255, 0.08)`
+    *   **Cách dùng:** Viền siêu mỏng bao quanh các card, nút bấm, sidebar để tạo hiệu ứng phản chiếu ánh sáng ở mép kính.
+*   **Màu sắc 3:** GLASS_SIDEBAR (Thanh biên trong suốt)
+    *   **Mã RGBA:** `rgba(12, 20, 28, 0.45)`
+    *   **Cách dùng:** Nền thanh menu biên trái bán trong suốt.
+
 ---
 
 ## 🛠 Hướng dẫn Triển khai Code (Java Swing)
 
-Đối với người phụ trách `client-app` (Trúc Ngọc), vui lòng tạo một class chứa các hằng số màu này (ví dụ `UIConstants.java`) để tái sử dụng xuyên suốt ứng dụng, thay vì hardcode trực tiếp mã HEX nhiều lần.
+Đối với người phụ trách `client-app` (Trúc Ngọc), vui lòng tạo một class chứa các hằng số màu này (ví dụ `UIConstants.java`) để tái sử dụng xuyên suốt ứng dụng, thay vì hardcode trực tiếp mã HEX nhiều lần. Khi vẽ các panel bán trong suốt dạng kính, hãy đảm bảo đặt `setOpaque(false)` cho panel và override `paintComponent(Graphics g)` để vẽ hình chữ nhật bo tròn với màu bán trong suốt (RGBA).
 
 **Ví dụ cấu trúc code Java:**
 
@@ -60,6 +71,11 @@ public class UIConstants {
     // Typography Colors
     public static final Color TEXT_WHITE  = Color.decode("#FFFFFF");
     public static final Color TEXT_SILVER = Color.decode("#E2E8F0");
+
+    // Glassmorphism (RGBA Colors)
+    public static final Color GLASS_CARD    = new Color(36, 47, 56, 90);    // ~35% alpha
+    public static final Color GLASS_BORDER  = new Color(255, 255, 255, 20);  // ~8% alpha
+    public static final Color GLASS_SIDEBAR = new Color(12, 20, 28, 115);   // ~45% alpha
 }
 ```
 

@@ -104,15 +104,13 @@ class CryptoTest {
     @Test
     void testHkdfKeyDerivation() throws Exception {
         byte[] ssEcdhe = new byte[32];
-        byte[] ssKyber = new byte[32];
         byte[] nonce = new byte[16];
 
         Arrays.fill(ssEcdhe, (byte) 1);
-        Arrays.fill(ssKyber, (byte) 2);
         Arrays.fill(nonce, (byte) 3);
 
-        byte[] masterKey1 = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, nonce);
-        byte[] masterKey2 = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, nonce);
+        byte[] masterKey1 = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, nonce);
+        byte[] masterKey2 = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, nonce);
 
         assertNotNull(masterKey1);
         assertEquals(32, masterKey1.length);
@@ -124,31 +122,13 @@ class CryptoTest {
         JsonNode tv = loadTestVectors().get("hkdf");
 
         byte[] ssEcdhe = HEX.parseHex(tv.get("ss_ecdhe").asText());
-        byte[] ssKyber = HEX.parseHex(tv.get("ss_kyber").asText());
         byte[] sessionNonce = HEX.parseHex(tv.get("session_nonce").asText());
         byte[] expectedMasterKey = HEX.parseHex(tv.get("expected_master_key").asText());
 
-        byte[] result = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, ssKyber, sessionNonce);
+        byte[] result = HkdfKeyDerivation.deriveSessionKey(ssEcdhe, sessionNonce);
 
         assertArrayEquals(expectedMasterKey, result,
                 "HKDF master key does not match test vector");
-    }
-
-    @Test
-    void testHkdfOrderMatters() throws Exception {
-        byte[] a = new byte[32];
-        byte[] b = new byte[32];
-        byte[] nonce = new byte[16];
-        Arrays.fill(a, (byte) 1);
-        Arrays.fill(b, (byte) 2);
-        Arrays.fill(nonce, (byte) 3);
-
-        // SS_ECDHE || SS_KYBER ≠ SS_KYBER || SS_ECDHE
-        byte[] key1 = HkdfKeyDerivation.deriveSessionKey(a, b, nonce);
-        byte[] key2 = HkdfKeyDerivation.deriveSessionKey(b, a, nonce);
-
-        assertFalse(Arrays.equals(key1, key2),
-                "Swapping ECDHE and Kyber should produce different keys");
     }
 
     // ====================================================================

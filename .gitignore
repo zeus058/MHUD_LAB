@@ -1,61 +1,26 @@
-# === Build output ===
+# Maven build output
 target/
 *.class
-*.jar
-*.war
 
-# === IDE ===
-.idea/
-*.iml
-.vscode/
-.settings/
-.project
-.classpath
-*.swp
-*~
+# SQLite databases & logs in data directory
+src/data/*.db
+src/data/*.db-shm
+src/data/*.db-wal
+src/data/*.log
 
-# === OS ===
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# === Logs & JVM crash dumps ===
-logs/
-*.log
-hs_err_pid*.log
-replay_pid*.log
-
-# === Runtime data (local dev / demo — không đẩy lên Git) ===
-src/data/**
-!src/data/.gitkeep
-!src/data/client/
-src/data/client/**
+# Client test data directories (preserve structure via .gitkeep)
+src/data/client/*
 !src/data/client/.gitkeep
+!src/data/.gitkeep
 
-# Legacy paths (trước khi gom vào data/client/<user>/)
-src/tickets_*.cache
-chat_history.db
-**/chat_history.db
-**/messages.sqlite
-**/chat.db
-**/*.cache
-**/*.p12
-**/*.salt
-**/chat_server_key.bin
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.iws
 
-# === Database (mọi vị trí) ===
-*.db
-*.db-shm
-*.db-wal
-*.sqlite
+# JVM crash logs and general logs
+src/hs_err_pid*.log
+**/logs/
+src/kdc-server/data/
 
-# === Secrets / env ===
-.env
-.env.local
-
-# === Python venv / one-off scripts ===
-.venv/
-remove_warnings.py
-
-# === Maven wrapper binary ===
-.mvn/wrapper/maven-wrapper.jar

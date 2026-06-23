@@ -140,8 +140,7 @@ public class AuthenticationService {
                     sessionKeyB64,
                     true,   // renewable
                     TGT_CV,
-                    request.getCert(),
-                    request.getDilithiumCert()
+                    request.getCert()
             );
 
             // 7. Serialize TgtInner → JSON bytes

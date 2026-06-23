@@ -25,9 +25,6 @@ public class StRequest {
     @JsonProperty("signature")
     private String signature; // Base64 signature of (tgt + "|" + authenticator + "|" + targetServer)
 
-    @JsonProperty("dilithiumSignature")
-    private String dilithiumSignature;
-
     @JsonProperty("channelBinding")
     private String channelBinding;
 
@@ -57,9 +54,6 @@ public class StRequest {
 
     public String getSignature() { return signature; }
     public void setSignature(String signature) { this.signature = signature; }
-
-    public String getDilithiumSignature() { return dilithiumSignature; }
-    public void setDilithiumSignature(String dilithiumSignature) { this.dilithiumSignature = dilithiumSignature; }
 
     public String getChannelBinding() { return channelBinding; }
     public void setChannelBinding(String channelBinding) { this.channelBinding = channelBinding; }

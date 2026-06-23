@@ -13,14 +13,10 @@ public class HkdfKeyDerivation {
 
     public static byte[] deriveSessionKey(
             byte[] ssEcdhe,   // 32 bytes shared secret từ ECDHE
-            byte[] ssKyber,   // 32 bytes shared secret từ Kyber
             byte[] sessionNonce // 16 bytes, trao đổi trong handshake
     ) throws KeyDerivationException {
 
-        // Thứ tự concatenate: SS_ECDHE TRƯỚC, SS_KYBER SAU — BẤT BIẾN
-        byte[] ikm = new byte[ssEcdhe.length + ssKyber.length];
-        System.arraycopy(ssEcdhe, 0, ikm, 0, ssEcdhe.length);
-        System.arraycopy(ssKyber, 0, ikm, ssEcdhe.length, ssKyber.length);
+        byte[] ikm = Arrays.copyOf(ssEcdhe, ssEcdhe.length);
 
         try {
             return hkdf(ikm, sessionNonce, CryptoConstants.HKDF_INFO, CryptoConstants.AES_KEY_SIZE_BYTES);
@@ -31,11 +27,11 @@ public class HkdfKeyDerivation {
         }
     }
 
-    public static byte[] deriveConversationKey(byte[] ssEcdhe, byte[] ssKyber, byte[] salt)
+    public static byte[] deriveConversationKey(byte[] ssEcdhe, byte[] salt)
             throws KeyDerivationException {
         byte[] master = null;
         try {
-            master = deriveSessionKey(ssEcdhe, ssKyber, salt);
+            master = deriveSessionKey(ssEcdhe, salt);
             return expand(master, "SecureChat-E2EE-conversation-v2",
                     CryptoConstants.E2EE_CONVERSATION_KEY_SIZE_BYTES);
         } finally {

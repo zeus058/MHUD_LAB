@@ -47,9 +47,6 @@ public class TgtInner {
     @JsonProperty("clientCert")
     private String clientCert; // Base64 of DER-encoded client certificate
 
-    @JsonProperty("clientDilithiumCert")
-    private String clientDilithiumCert;
-
     public TgtInner() {}
 
     public TgtInner(String clientId, String targetTgs, long issuedAt, long expiresAt,
@@ -77,7 +74,7 @@ public class TgtInner {
 
     public TgtInner(String tgtId, String clientId, String targetTgs, long issuedAt,
                     long expiresAt, long renewTill, String sessionKey, boolean renewable,
-                    String cv, String clientCert, String clientDilithiumCert) {
+                    String cv, String clientCert) {
         this.tgtId = tgtId;
         this.clientId = clientId;
         this.targetTgs = targetTgs;
@@ -88,7 +85,6 @@ public class TgtInner {
         this.renewable = renewable;
         this.cv = cv;
         this.clientCert = clientCert;
-        this.clientDilithiumCert = clientDilithiumCert;
     }
 
     public String getTgtId() { return tgtId; }
@@ -120,7 +116,4 @@ public class TgtInner {
 
     public String getClientCert() { return clientCert; }
     public void setClientCert(String clientCert) { this.clientCert = clientCert; }
-
-    public String getClientDilithiumCert() { return clientDilithiumCert; }
-    public void setClientDilithiumCert(String clientDilithiumCert) { this.clientDilithiumCert = clientDilithiumCert; }
 }

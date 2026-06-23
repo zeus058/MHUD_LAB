@@ -14,14 +14,13 @@ import javax.swing.plaf.basic.BasicScrollBarUI;
 /** Thanh cuộn mảnh, tối — phù hợp dark theme. */
 public class SlimScrollBarUI extends BasicScrollBarUI {
 
-  private static final Color TRACK = UIConstants.DEEP_CARBON;
-  private static final Color THUMB = UIConstants.DARK_SILVER;
-  private static final Color THUMB_HOVER = UIConstants.SECURE_TEAL;
+  private static final Color THUMB = new Color(255, 255, 255, 25);
+  private static final Color THUMB_HOVER = new Color(255, 255, 255, 64);
 
   @Override
   protected void configureScrollBarColors() {
     thumbColor = THUMB;
-    trackColor = TRACK;
+    trackColor = new Color(0, 0, 0, 0);
   }
 
   @Override
@@ -44,8 +43,7 @@ public class SlimScrollBarUI extends BasicScrollBarUI {
 
   @Override
   protected void paintTrack(Graphics g, JComponent c, Rectangle trackBounds) {
-    g.setColor(TRACK);
-    g.fillRect(trackBounds.x, trackBounds.y, trackBounds.width, trackBounds.height);
+    // Keep it transparent, do not paint any background
   }
 
   @Override
@@ -56,13 +54,13 @@ public class SlimScrollBarUI extends BasicScrollBarUI {
     Graphics2D g2 = (Graphics2D) g.create();
     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
     g2.setColor(isThumbRollover() ? THUMB_HOVER : THUMB);
-    int inset = 4;
+    int inset = 2; // make it slightly wider and sleeker
     if (scrollbar.getOrientation() == VERTICAL) {
       g2.fillRoundRect(thumbBounds.x + inset, thumbBounds.y,
-          thumbBounds.width - inset * 2, thumbBounds.height, 8, 8);
+          thumbBounds.width - inset * 2, thumbBounds.height, 4, 4);
     } else {
       g2.fillRoundRect(thumbBounds.x, thumbBounds.y + inset,
-          thumbBounds.width, thumbBounds.height - inset * 2, 8, 8);
+          thumbBounds.width, thumbBounds.height - inset * 2, 4, 4);
     }
     g2.dispose();
   }

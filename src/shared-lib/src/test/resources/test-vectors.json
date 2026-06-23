@@ -10,7 +10,7 @@
     "ss_kyber":           "eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011eeff0011",
     "session_nonce":      "deadbeefdeadbeefdeadbeefdeadbeef",
     "info":               "SecureChat-E2EE-v2",
-    "expected_master_key": "c054886af883fbb9da1fe22ba486d736eacba3625c58419976f630a1c4fab552"
+    "expected_master_key": "07839d926f7c36122f3b89fe2cdcaeb4fca3e17c2523cc2c20e65e82c5a4f370"
   },
   "pbkdf2": {
     "password":   "TestPassword123",
