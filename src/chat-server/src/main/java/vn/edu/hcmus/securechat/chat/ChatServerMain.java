@@ -53,6 +53,10 @@ import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.SessionTicket;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.UserListEntry;
+import vn.edu.hcmus.securechat.common.protocol.dto.GroupMessageDto;
+import vn.edu.hcmus.securechat.common.protocol.dto.FileMetadataDto;
+import vn.edu.hcmus.securechat.common.protocol.dto.FileChunkDto;
+import vn.edu.hcmus.securechat.common.protocol.dto.CallSignalDto;
 
 /**
  * Chat Server - routes encrypted E2EE messages between authenticated clients.
@@ -164,6 +168,10 @@ public class ChatServerMain {
                     case PREKEY_UPLOAD -> handlePreKeyUpload(frame, socket);
                     case PREKEY_REQUEST -> handlePreKeyRequest(frame, socket);
                     case E2EE_INIT -> handleE2eeInit(frame, socket, clientAddr);
+                    // === Tính năng mới ===
+                    case GROUP_MESSAGE -> handleGroupMessage(frame, socket, clientAddr);
+                    case FILE_INIT, FILE_CHUNK -> handleFileTransfer(frame, socket, clientAddr);
+                    case CALL_SDP_OFFER, CALL_SDP_ANSWER, CALL_ICE_CANDIDATE -> handleCallSignal(frame, socket, clientAddr);
                     default -> {
                         log.warn("Unexpected message type {} from {}", type, clientAddr);
                         sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Unexpected message type");
@@ -506,6 +514,164 @@ public class ChatServerMain {
         } catch (Exception e) {
             log.warn("E2EE init failed", e);
             sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid E2EE init");
+        }
+    }
+
+    // =========================================================================
+    // === Tính năng mới: Group Chat, File Transfer, Call Signaling ============
+    // =========================================================================
+
+    /**
+     * Xử lý GROUP_MESSAGE: kiểm tra sender hợp lệ, sau đó fan-out từng
+     * {@code encryptedPayloads[i]} tới {@code recipientIds[i]}.
+     * Server hoàn toàn mù trước nội dung và khóa nhóm (Zero-Knowledge).
+     */
+    private void handleGroupMessage(PacketFrame frame, Socket socket, String clientAddr) {
+        ClientSession sender = sessionFor(socket);
+        if (sender == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            GroupMessageDto dto = JsonSerializer.fromBytes(frame.getPayload(), GroupMessageDto.class);
+            if (dto == null || isBlank(dto.getSenderId()) || dto.getRecipientIds() == null
+                    || dto.getEncryptedPayloads() == null) {
+                throw new ProtocolException("GroupMessageDto missing required fields");
+            }
+            if (!Objects.equals(sender.clientId(), dto.getSenderId())) {
+                throw new ProtocolException("GroupMessage sender mismatch");
+            }
+            if (dto.getRecipientIds().size() != dto.getEncryptedPayloads().size()) {
+                throw new ProtocolException("recipientIds and encryptedPayloads count mismatch");
+            }
+
+            int routed = 0;
+            int stored = 0;
+            for (int i = 0; i < dto.getRecipientIds().size(); i++) {
+                String recipientId = dto.getRecipientIds().get(i);
+                if (isBlank(recipientId)) {
+                    continue;
+                }
+
+                ClientSession recipient = activeSessions.get(recipientId);
+                if (recipient == null || recipient.socket().isClosed()) {
+                    // Offline: lưu queue dưới dạng TYPE_GROUP_MESSAGE
+                    offlineMessages.computeIfAbsent(recipientId,
+                            k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                            .add(new OfflineMessage(sender.clientId(), recipientId,
+                                    PacketFrame.TYPE_GROUP_MESSAGE,
+                                    Arrays.copyOf(frame.getPayload(), frame.getPayload().length), true));
+                    stored++;
+                } else {
+                    writeFrame(recipient.socket(), PacketFrame.TYPE_GROUP_MESSAGE, frame.getPayload());
+                    routed++;
+                }
+            }
+
+            auditLog.info("GROUP_MESSAGE_FANOUT from={} groupId={} routed={} stored={} ip={}",
+                    sender.clientId(), dto.getGroupId(), routed, stored, clientAddr);
+        } catch (ProtocolException | IOException e) {
+            log.warn("handleGroupMessage failed from {}", clientAddr, e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid group message");
+        }
+    }
+
+    /**
+     * Xử lý FILE_INIT và FILE_CHUNK: Chỉ kiểm tra sender hợp lệ,
+     * lấy recipientId rồi forward nguyên gói tới recipient (Zero-Knowledge).
+     * Server không đọc FileKey hay nội dung chunk.
+     */
+    private void handleFileTransfer(PacketFrame frame, Socket socket, String clientAddr) {
+        ClientSession sender = sessionFor(socket);
+        if (sender == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            String recipientId;
+            String senderId;
+            byte frameType = frame.getType();
+
+            if (frameType == PacketFrame.TYPE_FILE_INIT) {
+                FileMetadataDto meta = JsonSerializer.fromBytes(frame.getPayload(), FileMetadataDto.class);
+                if (meta == null || isBlank(meta.getRecipientId()) || isBlank(meta.getSenderId())) {
+                    throw new ProtocolException("FileMetadataDto missing fields");
+                }
+                recipientId = meta.getRecipientId();
+                senderId    = meta.getSenderId();
+                auditLog.info("FILE_INIT from={} to={} transferId={} fileName={} size={}",
+                        senderId, recipientId, meta.getTransferId(), meta.getFileName(), meta.getFileSize());
+            } else { // FILE_CHUNK
+                FileChunkDto chunk = JsonSerializer.fromBytes(frame.getPayload(), FileChunkDto.class);
+                if (chunk == null || isBlank(chunk.getRecipientId()) || isBlank(chunk.getSenderId())) {
+                    throw new ProtocolException("FileChunkDto missing fields");
+                }
+                recipientId = chunk.getRecipientId();
+                senderId    = chunk.getSenderId();
+            }
+
+            if (!Objects.equals(sender.clientId(), senderId)) {
+                throw new ProtocolException("File sender mismatch");
+            }
+
+            ClientSession recipient = activeSessions.get(recipientId);
+            if (recipient == null || recipient.socket().isClosed()) {
+                // Offline: đối với FILE_INIT lưu lại, với FILE_CHUNK báo lỗi
+                if (frameType == PacketFrame.TYPE_FILE_INIT) {
+                    offlineMessages.computeIfAbsent(recipientId,
+                            k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                            .add(new OfflineMessage(senderId, recipientId,
+                                    PacketFrame.TYPE_FILE_INIT,
+                                    Arrays.copyOf(frame.getPayload(), frame.getPayload().length), true));
+                    log.info("FILE_INIT stored offline for {}", recipientId);
+                } else {
+                    sendError(socket, ErrorResponse.ERR_BAD_REQUEST,
+                            "Recipient offline, file transfer aborted");
+                }
+            } else {
+                writeFrame(recipient.socket(), frameType, frame.getPayload());
+            }
+        } catch (ProtocolException | IOException e) {
+            log.warn("handleFileTransfer failed from {}", clientAddr, e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid file transfer packet");
+        }
+    }
+
+    /**
+     * Xử lý WebRTC Call Signaling (CALL_SDP_OFFER/ANSWER/ICE).
+     * Giống E2EE_INIT: chỉ forward nguyên gói tới callee — Server zero-knowledge.
+     */
+    private void handleCallSignal(PacketFrame frame, Socket socket, String clientAddr) {
+        ClientSession sender = sessionFor(socket);
+        if (sender == null) {
+            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
+            return;
+        }
+        try {
+            CallSignalDto signal = JsonSerializer.fromBytes(frame.getPayload(), CallSignalDto.class);
+            if (signal == null || isBlank(signal.getCallerId()) || isBlank(signal.getCalleeId())) {
+                throw new ProtocolException("CallSignalDto missing callerId or calleeId");
+            }
+            if (!Objects.equals(sender.clientId(), signal.getCallerId())) {
+                throw new ProtocolException("Call signal caller mismatch");
+            }
+
+            String targetId = signal.getCalleeId();
+            ClientSession callee = activeSessions.get(targetId);
+            if (callee == null || callee.socket().isClosed()) {
+                // Peer offline — tín hiệu gọi không thể đợi
+                sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Callee is offline");
+                auditLog.warn("CALL_SIGNAL_DROPPED callId={} caller={} callee={} reason=OFFLINE",
+                        signal.getCallId(), signal.getCallerId(), signal.getCalleeId());
+            } else {
+                writeFrame(callee.socket(), frame.getType(), frame.getPayload());
+                auditLog.info("CALL_SIGNAL_FORWARDED callId={} caller={} callee={} type={} ip={}",
+                        signal.getCallId(), signal.getCallerId(), signal.getCalleeId(),
+                        signal.getSignalType(), clientAddr);
+            }
+        } catch (ProtocolException | IOException e) {
+            log.warn("handleCallSignal failed from {}", clientAddr, e);
+            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid call signal");
         }
     }
 

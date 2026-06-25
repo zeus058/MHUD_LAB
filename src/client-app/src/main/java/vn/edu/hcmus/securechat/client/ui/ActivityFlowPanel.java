@@ -91,7 +91,7 @@ public class ActivityFlowPanel extends JPanel {
         JPanel stack = new JPanel();
         stack.setOpaque(false);
         stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
-        stack.setPreferredSize(new Dimension(340, 330));
+        stack.setPreferredSize(new Dimension(360, 500));
 
         JPanel headerPanel = new JPanel();
         headerPanel.setOpaque(false);
@@ -544,7 +544,7 @@ public class ActivityFlowPanel extends JPanel {
             JPanel textContainer = new JPanel();
             textContainer.setOpaque(false);
             textContainer.setLayout(new BoxLayout(textContainer, BoxLayout.Y_AXIS));
-            textContainer.setBorder(new javax.swing.border.EmptyBorder(16, 0, 16, 0));
+            textContainer.setBorder(new javax.swing.border.EmptyBorder(10, 0, 10, 0));
 
             JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
             titleRow.setOpaque(false);

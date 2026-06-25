@@ -27,6 +27,15 @@ public enum MessageType {
     PREKEY_REQUEST(PacketFrame.TYPE_PREKEY_REQUEST, "Client xin Pre-Key Bundle"),
     PREKEY_RESPONSE(PacketFrame.TYPE_PREKEY_RESPONSE, "Server trả Pre-Key Bundle"),
     E2EE_INIT(PacketFrame.TYPE_E2EE_INIT, "E2EE init được ký transcript"),
+
+    // === Tính năng mới ===
+    GROUP_MESSAGE(PacketFrame.TYPE_GROUP_MESSAGE, "Tin nhắn nhóm (client fan-out)"),
+    FILE_INIT(PacketFrame.TYPE_FILE_INIT, "Bắt đầu truyền file (metadata + FileKey E2EE)"),
+    FILE_CHUNK(PacketFrame.TYPE_FILE_CHUNK, "Chunk nhị phân mã hóa của file"),
+    CALL_SDP_OFFER(PacketFrame.TYPE_CALL_SDP_OFFER, "WebRTC SDP Offer (E2EE signaling)"),
+    CALL_SDP_ANSWER(PacketFrame.TYPE_CALL_SDP_ANSWER, "WebRTC SDP Answer (E2EE signaling)"),
+    CALL_ICE_CANDIDATE(PacketFrame.TYPE_CALL_ICE_CANDIDATE, "WebRTC ICE Candidate (E2EE signaling)"),
+
     ERROR(PacketFrame.TYPE_ERROR, "Generic error response");
 
     private final byte code;

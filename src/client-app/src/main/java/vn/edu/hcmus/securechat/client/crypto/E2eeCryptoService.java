@@ -210,6 +210,9 @@ public class E2eeCryptoService {
     }
 
     public ChatMessage decryptIncoming(EncryptedChatEnvelope envelope) throws Exception {
+        log.info("decryptIncoming: conversationId='{}', senderId='{}', msgId={}, aadHash='{}', payload={}",
+                envelope.getConversationId(), envelope.getSenderId(), envelope.getMsgId(), envelope.getAadHash(),
+                envelope.getPayload() != null && envelope.getPayload().length() > 30 ? envelope.getPayload().substring(0, 30) + "..." : envelope.getPayload());
         if (isE2eeV2Envelope(envelope)) {
             DoubleRatchetSession session = sessionsByConversation.get(envelope.getConversationId());
             if (session == null) {

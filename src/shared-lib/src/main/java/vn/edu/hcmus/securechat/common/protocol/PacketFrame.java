@@ -26,6 +26,21 @@ public class PacketFrame {
     public static final byte TYPE_PREKEY_REQUEST = 0x0D;
     public static final byte TYPE_PREKEY_RESPONSE = 0x0E;
     public static final byte TYPE_E2EE_INIT = 0x0F;
+
+    // === Tính năng mới: Group Chat, File Transfer, Call ===
+    /** Client gửi tin nhắn nhóm (fan-out payload với nhiều mục tiêu). */
+    public static final byte TYPE_GROUP_MESSAGE = 0x10;
+    /** Client thông báo bắt đầu gửi file (metadata + FileKey mã hóa). */
+    public static final byte TYPE_FILE_INIT = 0x11;
+    /** Client gửi chunk nhị phân mã hóa của file. */
+    public static final byte TYPE_FILE_CHUNK = 0x12;
+    /** Signaling WebRTC: SDP Offer (E2EE bọc ngoài). */
+    public static final byte TYPE_CALL_SDP_OFFER = 0x13;
+    /** Signaling WebRTC: SDP Answer (E2EE bọc ngoài). */
+    public static final byte TYPE_CALL_SDP_ANSWER = 0x14;
+    /** Signaling WebRTC: ICE Candidate (E2EE bọc ngoài). */
+    public static final byte TYPE_CALL_ICE_CANDIDATE = 0x15;
+
     public static final byte TYPE_ERROR = (byte) 0xFF;
 
     private byte type;
@@ -56,7 +71,7 @@ public class PacketFrame {
         byte version = dis.readByte();
         short flags  = dis.readShort();
         int length   = dis.readInt();
-        if (length < 0 || length > 10 * 1024 * 1024) { // max 10 MB
+        if (length < 0 || length > 50 * 1024 * 1024) { // max 50 MB (hỗ trợ file chunk)
             throw new FramingException("Invalid payload length: " + length);
         }
         byte[] payload = dis.readNBytes(length);

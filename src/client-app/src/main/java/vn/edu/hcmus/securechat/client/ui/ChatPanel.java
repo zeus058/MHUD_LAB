@@ -49,12 +49,19 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import vn.edu.hcmus.securechat.client.crypto.E2eeCryptoService;
+import vn.edu.hcmus.securechat.client.network.FileTransferManager;
+import vn.edu.hcmus.securechat.client.network.GroupManager;
+import vn.edu.hcmus.securechat.client.network.WebRtcManager;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
+import vn.edu.hcmus.securechat.common.protocol.dto.CallSignalDto;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage;
 import vn.edu.hcmus.securechat.common.protocol.dto.E2eeInitMessage;
 import vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope;
 import vn.edu.hcmus.securechat.common.protocol.dto.ErrorResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.FileChunkDto;
+import vn.edu.hcmus.securechat.common.protocol.dto.FileMetadataDto;
+import vn.edu.hcmus.securechat.common.protocol.dto.GroupMessageDto;
 import vn.edu.hcmus.securechat.common.protocol.dto.PreKeyBundle;
 import vn.edu.hcmus.securechat.common.protocol.dto.UserListEntry;
 
@@ -93,11 +100,28 @@ public class ChatPanel extends JPanel {
     private DefaultListModel<ConversationItem> userListModel;
     private JList<ConversationItem> userList;
     private boolean updatingUserList;
+    private List<ConversationItem> lastUserList = new java.util.ArrayList<>();
     private int messageCount = 0;
 
-    private boolean rightRailOpen = true;
+    private boolean rightRailOpen = false;
     private JPanel rightRail;
     private JButton connHeaderBtn;
+
+    // === Fields cuộc gọi và nút header ===
+    private javax.swing.JDialog activeCallDialog;
+    private JLabel activeCallStateLbl;
+    private JButton phoneBtn;
+    private JButton videoBtn;
+    private JButton deleteBtn;
+
+    // === Managers cho tính năng mới ===
+    private final GroupManager groupManager;
+    private final FileTransferManager fileTransferManager;
+    private final WebRtcManager webRtcManager;
+    /** Thanh điều khiển cuộc gọi hiển thị trực tiếp trên giao diện (không phải dialog popup). */
+    private JPanel callControlBar;
+    /** Tín hiệu cuộc gọi đến chưa trả lời (pending inbound). */
+    private CallSignalDto pendingInboundCall;
 
     public ChatPanel(String username, E2eeCryptoService e2ee,
             vn.edu.hcmus.securechat.client.db.LocalDatabase localDb, ChatListener listener) {
@@ -116,6 +140,27 @@ public class ChatPanel extends JPanel {
             ActivityFlowPanel.Tone t = ActivityFlowPanel.Tone.valueOf(tone.name());
             activityPanel.addEvent(title, body, t);
         });
+
+        // 3. Khởi tạo 3 Managers
+        this.groupManager = new GroupManager(username, e2ee, localDb);
+        this.fileTransferManager = new FileTransferManager(username, e2ee);
+        this.fileTransferManager.setGroupManager(this.groupManager);
+        this.webRtcManager = new WebRtcManager(username, e2ee);
+
+        // Wire FileTransfer callbacks (chạy trên background thread)
+        this.fileTransferManager.setOnFileReceived((file, fileName, senderId, groupId) ->
+            SwingUtilities.invokeLater(() -> showFileReceivedNotification(file, fileName, senderId, groupId)));
+        this.fileTransferManager.setOnProgress((transferId, pct) ->
+            SwingUtilities.invokeLater(() -> flow("File transfer", transferId + " — " + pct + "%",
+                    pct == 100 ? ActivityFlowPanel.Tone.SUCCESS : ActivityFlowPanel.Tone.INFO)));
+
+        // Wire WebRTC callbacks
+        this.webRtcManager.setOnStateChanged(state ->
+            SwingUtilities.invokeLater(() -> onCallStateChanged(state)));
+        this.webRtcManager.setOnCallEnded(peerId ->
+            SwingUtilities.invokeLater(() -> onCallEndedByPeer(peerId)));
+        this.webRtcManager.setOnSignalReceived(signal ->
+            SwingUtilities.invokeLater(() -> handleIncomingCallSignalUI(signal)));
 
         setLayout(new BorderLayout());
         setBackground(UIConstants.DEEP_CARBON);
@@ -329,12 +374,97 @@ public class ChatPanel extends JPanel {
             }
         });
 
+        userList.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                handlePopup(e);
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                handlePopup(e);
+            }
+
+            private void handlePopup(java.awt.event.MouseEvent e) {
+                if (e.isPopupTrigger() || javax.swing.SwingUtilities.isRightMouseButton(e)) {
+                    int index = userList.locationToIndex(e.getPoint());
+                    if (index >= 0) {
+                        userList.setSelectedIndex(index);
+                        ConversationItem sel = userList.getSelectedValue();
+                        if (sel != null && sel.isGroup && sel.isSelectable(username)) {
+                            javax.swing.JPopupMenu popup = new javax.swing.JPopupMenu();
+                            javax.swing.JMenuItem deleteItem = new javax.swing.JMenuItem("Xóa nhóm");
+                            deleteItem.addActionListener(ae -> {
+                                int confirm = javax.swing.JOptionPane.showConfirmDialog(
+                                    ChatPanel.this,
+                                    "Bạn có chắc chắn muốn xóa nhóm \"" + sel.displayName() + "\" không?\nLịch sử trò chuyện của nhóm cũng sẽ bị xóa.",
+                                    "Xác nhận xóa nhóm",
+                                    javax.swing.JOptionPane.YES_NO_OPTION,
+                                    javax.swing.JOptionPane.WARNING_MESSAGE
+                                );
+                                if (confirm == javax.swing.JOptionPane.YES_OPTION) {
+                                    groupManager.removeGroup(sel.userId);
+                                    if (sel.userId.equals(selectedPeer)) {
+                                        clearActiveChat();
+                                    }
+                                    applyUserList(lastUserList);
+                                }
+                            });
+                            popup.add(deleteItem);
+                            popup.show(userList, e.getX(), e.getY());
+                        }
+                    }
+                }
+            }
+        });
+
         JScrollPane userScroll = UiStyles.styledScrollPane(userList);
         userScroll.getViewport().setBackground(new Color(0, 0, 0, 0));
         userScroll.getViewport().setOpaque(false);
         userScroll.setBackground(new Color(0, 0, 0, 0));
         userScroll.setOpaque(false);
         sidebar.add(userScroll, BorderLayout.CENTER);
+
+        // === Nút Tạo nhóm ở cuối sidebar ===
+        JPanel groupBtnPanel = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 0, 10)) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setColor(UIConstants.GLASS_BORDER);
+                g2.drawLine(16, 0, getWidth() - 16, 0);
+                g2.dispose();
+            }
+        };
+        groupBtnPanel.setOpaque(false);
+        groupBtnPanel.setBorder(new EmptyBorder(2, 12, 12, 12));
+
+        JButton createGroupBtn = new JButton("✜ Tạo nhóm") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 161, 156, 30));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+                g2.setColor(UIConstants.SECURE_TEAL);
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, 12, 12);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        createGroupBtn.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 13f));
+        createGroupBtn.setForeground(UIConstants.SECURE_TEAL);
+        createGroupBtn.setContentAreaFilled(false);
+        createGroupBtn.setBorderPainted(false);
+        createGroupBtn.setFocusPainted(false);
+        createGroupBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        createGroupBtn.setPreferredSize(new Dimension(CHAT_LIST_WIDTH - 24, 38));
+        createGroupBtn.setToolTipText("Tạo nhóm chat mới");
+        createGroupBtn.addActionListener(e -> showCreateGroupDialog());
+        groupBtnPanel.add(createGroupBtn);
+        sidebar.add(groupBtnPanel, BorderLayout.SOUTH);
+
         return sidebar;
     }
 
@@ -373,9 +503,26 @@ public class ChatPanel extends JPanel {
         JPanel actionsRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         actionsRow.setOpaque(false);
 
-        actionsRow.add(createHeaderButton("phone"));
-        actionsRow.add(createHeaderButton("video"));
-        actionsRow.add(createHeaderButton("more"));
+        phoneBtn = createHeaderButton("phone");
+        phoneBtn.setToolTipText("Gọi thoại");
+        phoneBtn.setEnabled(false);
+        phoneBtn.addActionListener(e -> startCallWithPeer(WebRtcManager.MediaType.AUDIO));
+        actionsRow.add(phoneBtn);
+
+        videoBtn = createHeaderButton("video");
+        videoBtn.setToolTipText("Gọi video");
+        videoBtn.setEnabled(false);
+        videoBtn.addActionListener(e -> startCallWithPeer(WebRtcManager.MediaType.VIDEO));
+        actionsRow.add(videoBtn);
+
+        deleteBtn = createHeaderButton("delete");
+        deleteBtn.setToolTipText("Xóa nhóm");
+        deleteBtn.setEnabled(false);
+        deleteBtn.setVisible(false);
+        deleteBtn.addActionListener(e -> deleteActiveGroup());
+        actionsRow.add(deleteBtn);
+
+
 
         connHeaderBtn = new JButton("Connection") {
             @Override
@@ -432,13 +579,24 @@ public class ChatPanel extends JPanel {
             revalidate();
             repaint();
         });
-        actionsRow.add(connHeaderBtn);
+        // actionsRow.add(connHeaderBtn);
 
         topBar.add(actionsRow, BorderLayout.EAST);
 
         hintWrap = new JPanel();
         hintWrap.setVisible(false);
-        chat.add(topBar, BorderLayout.NORTH);
+
+        // Container panel bọc topBar và callControlBar theo trục dọc
+        JPanel northWrapper = new JPanel();
+        northWrapper.setLayout(new BoxLayout(northWrapper, BoxLayout.Y_AXIS));
+        northWrapper.setOpaque(false);
+        northWrapper.add(topBar);
+
+        callControlBar = new JPanel(new BorderLayout());
+        callControlBar.setVisible(false);
+        northWrapper.add(callControlBar);
+
+        chat.add(northWrapper, BorderLayout.NORTH);
 
         messageContainer = new JPanel();
         messageContainer.setLayout(new BoxLayout(messageContainer, BoxLayout.Y_AXIS));
@@ -512,6 +670,13 @@ public class ChatPanel extends JPanel {
                 } else if ("close".equals(iconName)) {
                     g2.drawLine(ix + 4, iy + 4, ix + size - 4, iy + size - 4);
                     g2.drawLine(ix + size - 4, iy + 4, ix + 4, iy + size - 4);
+                } else if ("delete".equals(iconName)) {
+                    // Draw a vector trash can icon
+                    g2.drawRoundRect(ix + 6, iy + 1, 4, 2, 1, 1);
+                    g2.drawLine(ix + 2, iy + 3, ix + size - 2, iy + 3);
+                    g2.drawRoundRect(ix + 4, iy + 4, size - 8, size - 5, 2, 2);
+                    g2.drawLine(ix + 7, iy + 7, ix + 7, iy + 11);
+                    g2.drawLine(ix + 9, iy + 7, ix + 9, iy + 11);
                 }
                 g2.dispose();
             }
@@ -580,6 +745,8 @@ public class ChatPanel extends JPanel {
         this.attachBtn.setFocusPainted(false);
         this.attachBtn.setEnabled(false);
         this.attachBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        // Wire attach button: mở hộp thoại chọn file
+        this.attachBtn.addActionListener(e -> openFileChooser());
         pill.add(this.attachBtn, BorderLayout.WEST);
 
         messageInput = new EmbeddedPlaceholderField("Type a message");
@@ -658,6 +825,51 @@ public class ChatPanel extends JPanel {
         }
     }
 
+    private void clearActiveChat() {
+        selectedPeer = null;
+        updatePeerHeader(null);
+        messageInput.setText("");
+        messageInput.setEnabled(false);
+        if (attachBtn != null) attachBtn.setEnabled(false);
+        if (sendBtn != null) sendBtn.setEnabled(false);
+        if (phoneBtn != null) {
+            phoneBtn.setEnabled(false);
+            phoneBtn.setVisible(true);
+        }
+        if (videoBtn != null) {
+            videoBtn.setEnabled(false);
+            videoBtn.setVisible(true);
+        }
+        if (deleteBtn != null) {
+            deleteBtn.setEnabled(false);
+            deleteBtn.setVisible(false);
+        }
+        messageContainer.removeAll();
+        messageContainer.add(Box.createVerticalGlue());
+        messageContainer.revalidate();
+        messageContainer.repaint();
+        userList.clearSelection();
+    }
+
+    private void deleteActiveGroup() {
+        if (selectedPeer == null || !selectedPeer.startsWith("group-")) {
+            return;
+        }
+        String groupName = peerTitle.getText();
+        int confirm = javax.swing.JOptionPane.showConfirmDialog(
+            ChatPanel.this,
+            "Bạn có chắc chắn muốn xóa nhóm \"" + groupName + "\" không?\nLịch sử trò chuyện của nhóm cũng sẽ bị xóa.",
+            "Xác nhận xóa nhóm",
+            javax.swing.JOptionPane.YES_NO_OPTION,
+            javax.swing.JOptionPane.WARNING_MESSAGE
+        );
+        if (confirm == javax.swing.JOptionPane.YES_OPTION) {
+            groupManager.removeGroup(selectedPeer);
+            clearActiveChat();
+            applyUserList(lastUserList);
+        }
+    }
+
     private void selectPeer(ConversationItem item) {
         selectedPeer = item.userId;
         item.unreadCount = 0;
@@ -671,6 +883,22 @@ public class ChatPanel extends JPanel {
             sendBtn.setEnabled(true);
             sendBtn.repaint();
         }
+        
+        // Show/hide call and delete buttons based on conversation type
+        boolean isGroup = item.isGroup;
+        if (phoneBtn != null) {
+            phoneBtn.setEnabled(!isGroup);
+            phoneBtn.setVisible(!isGroup);
+        }
+        if (videoBtn != null) {
+            videoBtn.setEnabled(!isGroup);
+            videoBtn.setVisible(!isGroup);
+        }
+        if (deleteBtn != null) {
+            deleteBtn.setEnabled(isGroup);
+            deleteBtn.setVisible(isGroup);
+        }
+
         loadChatHistory();
         userList.repaint();
         messageInput.requestFocusInWindow();
@@ -716,7 +944,7 @@ public class ChatPanel extends JPanel {
                 boolean outgoing = msg.getSenderId().equals(username);
                 String time = Instant.ofEpochSecond(msg.getSentAt())
                         .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
-                addMessageBubbleInternal(msg.getContent(), outgoing, time);
+                addMessageBubbleInternal(msg.getContent(), outgoing, time, selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
                 this.messageCount++;
             }
         }
@@ -772,17 +1000,16 @@ public class ChatPanel extends JPanel {
             @Override
             protected Boolean doInBackground() {
                 try {
-                    Socket sock = e2ee.getChatSocket();
-                    if (sock == null || sock.isClosed()) {
-                        return false;
+                    if (peerToSend.startsWith("group-")) {
+                        groupManager.sendGroupMessage(peerToSend, textToSend);
+                    } else {
+                        EncryptedChatEnvelope envelope = e2ee.encryptForPeer(peerToSend, textToSend);
+                        e2ee.sendFrame(PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(envelope));
                     }
-
-                    EncryptedChatEnvelope envelope = e2ee.encryptForPeer(peerToSend, textToSend);
-                    e2ee.sendFrame(PacketFrame.TYPE_CHAT_MESSAGE, JsonSerializer.toBytes(envelope));
                     return true;
                 } catch (Exception ex) {
                     log.error("Gửi tin nhắn thất bại", ex);
-                    flow("Trao đổi khóa hoặc gửi tin thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    flow("Gửi tin thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
                     return false;
                 }
             }
@@ -836,6 +1063,7 @@ public class ChatPanel extends JPanel {
         try {
             if (frame.getType() == PacketFrame.TYPE_USER_LIST) {
                 List<ConversationItem> users = parseUserList(frame.getPayload());
+                this.lastUserList = users;
                 SwingUtilities.invokeLater(() -> applyUserList(users));
             } else if (frame.getType() == PacketFrame.TYPE_CHAT_MESSAGE) {
                 EncryptedChatEnvelope envelope = JsonSerializer.fromBytes(
@@ -866,6 +1094,84 @@ public class ChatPanel extends JPanel {
             } else if (frame.getType() == PacketFrame.TYPE_ERROR) {
                 String message = decodeError(frame);
                 e2ee.handleServerError(message);
+            // === Tính năng mới ===
+            } else if (frame.getType() == PacketFrame.TYPE_GROUP_MESSAGE) {
+                GroupMessageDto groupMsg = JsonSerializer.fromBytes(
+                        frame.getPayload(), GroupMessageDto.class);
+                if (groupMsg != null) {
+                    int myIndex = groupMsg.getRecipientIds().indexOf(username);
+                    if (myIndex >= 0 && myIndex < groupMsg.getEncryptedPayloads().size()) {
+                        String payloadJson = groupMsg.getEncryptedPayloads().get(myIndex);
+                        EncryptedChatEnvelope envelope = JsonSerializer.fromString(
+                                payloadJson, EncryptedChatEnvelope.class);
+                        ChatMessage msg = e2ee.decryptIncoming(envelope);
+                        String sender = msg.getSenderId();
+                        String text = msg.getContent();
+                        String groupId = groupMsg.getGroupId();
+                        String groupName = groupMsg.getGroupName();
+                        String time = Instant.ofEpochSecond(msg.getSentAt())
+                                .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
+                        
+                        SwingUtilities.invokeLater(() -> {
+                            List<String> allMembers = new ArrayList<>();
+                            allMembers.add(sender);
+                            if (groupMsg.getRecipientIds() != null) {
+                                allMembers.addAll(groupMsg.getRecipientIds());
+                            }
+                            groupManager.registerGroup(groupId, groupName, allMembers);
+                            ConversationItem item = findConversation(groupId);
+                            if (item == null) {
+                                item = ConversationItem.manual(groupId);
+                                item.displayName = groupName;
+                                item.online = true;
+                                item.isGroup = true;
+                                addConversation(item);
+                            }
+                            
+                            if (groupId.equals(selectedPeer)) {
+                                addMessageBubble(text, false, time, sender);
+                                item.unreadCount = 0;
+                            } else {
+                                item.unreadCount++;
+                            }
+                            localDb.saveMessage(username, groupId, sender, text, msg.getSentAt());
+                            userList.repaint();
+                        });
+                    }
+                }
+            } else if (frame.getType() == PacketFrame.TYPE_FILE_INIT) {
+                FileMetadataDto meta = JsonSerializer.fromBytes(frame.getPayload(), FileMetadataDto.class);
+                fileTransferManager.handleFileInit(meta);
+                SwingUtilities.invokeLater(() -> flow("File đến",
+                        meta.getSenderId() + " gửi \"" + meta.getFileName() + "\" ("
+                        + (meta.getFileSize() / 1024) + " KB)",
+                        ActivityFlowPanel.Tone.INFO));
+            } else if (frame.getType() == PacketFrame.TYPE_FILE_CHUNK) {
+                FileChunkDto chunk = JsonSerializer.fromBytes(frame.getPayload(), FileChunkDto.class);
+                fileTransferManager.handleFileChunk(chunk);
+            } else if (frame.getType() == PacketFrame.TYPE_CALL_SDP_OFFER
+                    || frame.getType() == PacketFrame.TYPE_CALL_SDP_ANSWER
+                    || frame.getType() == PacketFrame.TYPE_CALL_ICE_CANDIDATE) {
+                // Giải mã E2EE rồi chuyển cho WebRtcManager (chỉ với các gói sdp/ice điều khiển, không với audio frame)
+                CallSignalDto signal = JsonSerializer.fromBytes(frame.getPayload(), CallSignalDto.class);
+                if (signal != null) {
+                    if ("AUDIO_FRAME".equals(signal.getSignalType())) {
+                        // Chạy trực tiếp trên receiver thread ngoài EDT để tránh blocking UI và bỏ qua giải mã Double Ratchet
+                        webRtcManager.handleIncomingSignal(signal);
+                    } else {
+                        try {
+                            // Giải mã encryptedSignal bằng Double Ratchet
+                            EncryptedChatEnvelope env = JsonSerializer.fromString(
+                                    signal.getEncryptedSignal(), EncryptedChatEnvelope.class);
+                            ChatMessage plainSignal = e2ee.decryptIncoming(env);
+                            signal.setEncryptedSignal(plainSignal.getContent());
+                        } catch (Exception ex) {
+                            log.warn("Failed to decrypt call signal payload", ex);
+                        }
+                        CallSignalDto finalSignal = signal;
+                        SwingUtilities.invokeLater(() -> webRtcManager.handleIncomingSignal(finalSignal));
+                    }
+                }
             }
         } catch (Exception ex) {
             log.warn("Lỗi xử lý frame từ server", ex);
@@ -903,10 +1209,19 @@ public class ChatPanel extends JPanel {
         updatingUserList = true;
         try {
             userListModel.clear();
+            if (groupManager != null) {
+                for (GroupManager.GroupInfo g : groupManager.listGroups()) {
+                    ConversationItem item = ConversationItem.manual(g.groupId());
+                    item.displayName = g.groupName();
+                    item.online = true;
+                    item.isGroup = true;
+                    userListModel.addElement(item);
+                }
+            }
             for (ConversationItem item : users) {
                 userListModel.addElement(item);
             }
-            if (selectedPeer != null && findIn(users, selectedPeer) == null) {
+            if (selectedPeer != null && findIn(users, selectedPeer) == null && !selectedPeer.startsWith("group-")) {
                 userListModel.addElement(ConversationItem.manual(selectedPeer));
             }
             if (userListModel.isEmpty()) {
@@ -928,8 +1243,9 @@ public class ChatPanel extends JPanel {
             existing.preKeyAvailable = existing.preKeyAvailable || preKeyAvailable;
             return existing;
         }
+        boolean isGrp = peer.startsWith("group-");
         ConversationItem item = new ConversationItem(peer, online, preKeyAvailable,
-                Instant.now().getEpochSecond(), false);
+                Instant.now().getEpochSecond(), false, isGrp);
         addConversation(item);
         return item;
     }
@@ -940,6 +1256,1234 @@ public class ChatPanel extends JPanel {
         }
         userListModel.addElement(item);
     }
+
+    // =========================================================================
+    // === TÍNH NĂNG MỚI: File Transfer ========================================
+    // =========================================================================
+
+    /** Mở hộp thoại chọn file để gửi E2EE cho peer đang chat. */
+    private void openFileChooser() {
+        if (selectedPeer == null) return;
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+        chooser.setDialogTitle("Chọn file để gửi cho " + selectedPeer);
+        chooser.setMultiSelectionEnabled(false);
+        int result = chooser.showOpenDialog(this);
+        if (result != javax.swing.JFileChooser.APPROVE_OPTION) return;
+
+        java.io.File selectedFile = chooser.getSelectedFile();
+        String peer = selectedPeer;
+
+        // Hiển thị tin nhắn tạm thời
+        String time = java.time.LocalTime.now().format(TIME_FMT);
+        addMessageBubble("📎 " + selectedFile.getName() + " (đang gửi...)", true, time);
+
+        new SwingWorker<Boolean, Void>() {
+            @Override
+            protected Boolean doInBackground() throws Exception {
+                fileTransferManager.sendFile(selectedFile, peer);
+                return true;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    flow("File đã gửi",
+                            "\"" + selectedFile.getName() + "\" → " + peer,
+                            ActivityFlowPanel.Tone.SUCCESS);
+                    
+                    if (localDb != null) {
+                        localDb.saveMessage(username, peer, username, "📎 " + selectedFile.getName() + " (đã gửi)", Instant.now().getEpochSecond());
+                    }
+                    if (peer.equals(selectedPeer)) {
+                        loadChatHistory();
+                    }
+                } catch (Exception ex) {
+                    log.error("File send failed", ex);
+                    flow("Gửi file thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Hiển thị thông báo nhận file xong (chạy trên EDT).
+     */
+    private void showFileReceivedNotification(java.io.File file, String fileName, String senderId, String groupId) {
+        String peer = (groupId != null && !groupId.isEmpty()) ? groupId : senderId;
+
+        flow("File nhận xong ✓", "\"" + fileName + "\" đã lưu tại " + file.getParent(),
+                ActivityFlowPanel.Tone.SUCCESS);
+
+        // Thêm bubble tin nhắn hệ thống
+        String time = java.time.LocalTime.now().format(TIME_FMT);
+        
+        // Save to SQLite DB for persistence
+        if (localDb != null) {
+            localDb.saveMessage(username, peer, senderId, "📥 " + fileName + " (đã nhận — SHA-256 ✓)", Instant.now().getEpochSecond());
+        }
+
+        if (peer.equals(selectedPeer)) {
+            addMessageBubble("📥 " + fileName + " (đã nhận — SHA-256 ✓)", false, time, senderId);
+        } else {
+            ConversationItem item = findConversation(peer);
+            if (item == null) {
+                if (groupId != null && !groupId.isEmpty() && groupManager != null) {
+                    GroupManager.GroupInfo group = groupManager.getGroup(groupId);
+                    String groupName = group != null ? group.groupName() : "Nhóm mới";
+                    item = ConversationItem.manual(groupId);
+                    item.displayName = groupName;
+                    item.online = true;
+                    item.isGroup = true;
+                    addConversation(item);
+                } else {
+                    item = ConversationItem.manual(senderId);
+                    addConversation(item);
+                }
+            }
+            item.unreadCount++;
+            userList.repaint();
+        }
+
+        // Hỏi mở file không
+        int opt = javax.swing.JOptionPane.showConfirmDialog(this,
+                "Đã nhận xong file \"" + fileName + "\".\nBạn có muốn mở thư mục lưu không?",
+                "File đã tải xong", javax.swing.JOptionPane.YES_NO_OPTION,
+                javax.swing.JOptionPane.INFORMATION_MESSAGE);
+        if (opt == javax.swing.JOptionPane.YES_OPTION) {
+            try {
+                java.awt.Desktop.getDesktop().open(file.getParentFile());
+            } catch (Exception ex) {
+                log.warn("Cannot open directory: {}", ex.getMessage());
+            }
+        }
+    }
+
+    // =========================================================================
+    // === TÍNH NĂNG MỚI: Group Chat ===========================================
+    // =========================================================================
+
+    /**
+     * Hiển thị dialog tạo nhóm — Glassmorphism UI.
+     */
+    private void showCreateGroupDialog() {
+        javax.swing.JFrame topFrame = (javax.swing.JFrame)
+                javax.swing.SwingUtilities.getWindowAncestor(this);
+
+        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Tạo nhóm chat mới", true);
+        dialog.setMinimumSize(new Dimension(460, 420));
+        dialog.setUndecorated(false);
+        dialog.getContentPane().setBackground(UIConstants.DEEP_CARBON);
+
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(UIConstants.DEEP_CARBON);
+        content.setBorder(new EmptyBorder(24, 28, 24, 28));
+
+        JLabel title = UiStyles.headingLabel("Tạo nhóm chat");
+        title.setForeground(UIConstants.TEXT_WHITE);
+        title.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        content.add(title);
+        content.add(Box.createVerticalStrut(20));
+
+        JLabel nameLabel = UiStyles.mutedLabel("Tên nhóm");
+        nameLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        content.add(nameLabel);
+        content.add(Box.createVerticalStrut(6));
+
+        JTextField groupNameField = UiStyles.styledTextField(20);
+        UiStyles.setPlaceholder(groupNameField, "VD: Nhóm học tập, Dev Team...");
+        groupNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        groupNameField.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        content.add(groupNameField);
+        content.add(Box.createVerticalStrut(18));
+
+        JLabel membersLabel = UiStyles.mutedLabel("Chọn thành viên vào nhóm");
+        membersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        content.add(membersLabel);
+        content.add(Box.createVerticalStrut(6));
+
+        JPanel membersPanel = new JPanel();
+        membersPanel.setLayout(new BoxLayout(membersPanel, BoxLayout.Y_AXIS));
+        membersPanel.setBackground(UIConstants.INPUT_BG);
+        membersPanel.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        List<javax.swing.JCheckBox> checkBoxes = new ArrayList<>();
+        if (lastUserList != null) {
+            for (ConversationItem user : lastUserList) {
+                if (user != null && !user.placeholder && !user.isGroup && !user.userId.equals(username)) {
+                    javax.swing.JCheckBox cb = new javax.swing.JCheckBox(user.displayName() + " (" + user.userId + ")");
+                    cb.setActionCommand(user.userId);
+                    cb.setFont(UIConstants.FONT_BODY);
+                    cb.setForeground(UIConstants.TEXT_SILVER);
+                    cb.setOpaque(false);
+                    cb.setFocusPainted(false);
+                    if (user.userId.equals(selectedPeer)) {
+                        cb.setSelected(true);
+                    }
+                    membersPanel.add(cb);
+                    membersPanel.add(Box.createVerticalStrut(6));
+                    checkBoxes.add(cb);
+                }
+            }
+        }
+
+        if (checkBoxes.isEmpty()) {
+            JLabel noUsersLabel = new JLabel("Không có thành viên trực tuyến nào khác");
+            noUsersLabel.setFont(UIConstants.FONT_BODY);
+            noUsersLabel.setForeground(UIConstants.TEXT_MUTED);
+            noUsersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+            membersPanel.add(noUsersLabel);
+        }
+
+        JScrollPane scrollPane = new JScrollPane(membersPanel);
+        scrollPane.setBorder(BorderFactory.createLineBorder(UIConstants.GLASS_BORDER, 1));
+        scrollPane.setBackground(UIConstants.INPUT_BG);
+        scrollPane.getViewport().setBackground(UIConstants.INPUT_BG);
+        scrollPane.setPreferredSize(new Dimension(380, 150));
+        scrollPane.setMinimumSize(new Dimension(380, 150));
+        scrollPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
+        scrollPane.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        content.add(scrollPane);
+        content.add(Box.createVerticalStrut(24));
+
+        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 8, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+
+        JButton cancelBtn = UiStyles.ghostButton("Hủy");
+        cancelBtn.addActionListener(e -> dialog.dispose());
+        btnRow.add(cancelBtn);
+
+        JButton createBtn = UiStyles.primaryButton("Tạo nhóm");
+        createBtn.addActionListener(e -> {
+            String groupName = groupNameField.getText().trim();
+            if (groupName.isEmpty()) {
+                groupNameField.requestFocus();
+                return;
+            }
+            List<String> memberIds = new ArrayList<>();
+            for (javax.swing.JCheckBox cb : checkBoxes) {
+                if (cb.isSelected()) {
+                    memberIds.add(cb.getActionCommand());
+                }
+            }
+            if (memberIds.isEmpty()) {
+                javax.swing.JOptionPane.showMessageDialog(dialog,
+                        "Vui lòng chọn ít nhất 1 thành viên.", "Lỗi",
+                        javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            GroupManager.GroupInfo group = groupManager.createGroup(groupName, memberIds);
+            flow("Nhóm đã tạo", "\"" + groupName + "\" với " + memberIds.size() + " thành viên",
+                    ActivityFlowPanel.Tone.SUCCESS);
+            dialog.dispose();
+
+            // Mở conversation với nhóm vừa tạo
+            ConversationItem groupItem = ConversationItem.manual(group.groupId());
+            groupItem.displayName = group.groupName();
+            groupItem.online = true;
+            groupItem.isGroup = true;
+            SwingUtilities.invokeLater(() -> {
+                addConversation(groupItem);
+                selectPeer(groupItem);
+            });
+        });
+        btnRow.add(createBtn);
+        content.add(btnRow);
+
+        dialog.setContentPane(content);
+        dialog.pack();
+        dialog.setLocationRelativeTo(topFrame);
+        dialog.setVisible(true);
+    }
+
+    // =========================================================================
+    // === TÍNH NĂNG MỚI: Voice/Video Call =====================================
+    // =========================================================================
+
+    private static class VideoMeshPanel extends JPanel {
+        private float waveOffset = 0f;
+        boolean micMuted = false;
+        boolean camOff = false;
+        private final String peerId;
+        private final String localId;
+        private final javax.swing.Timer timer;
+
+        VideoMeshPanel(String peerId, String localId) {
+            this.peerId = peerId;
+            this.localId = localId;
+            setLayout(null);
+            
+            timer = new javax.swing.Timer(50, e -> {
+                waveOffset += 0.05f;
+                repaint();
+            });
+            timer.start();
+        }
+
+        void cleanup() {
+            timer.stop();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            
+            int w = getWidth();
+            int h = getHeight();
+
+            if (camOff) {
+                g2.setColor(new Color(15, 23, 42));
+                g2.fillRect(0, 0, w, h);
+                g2.setColor(UIConstants.TEXT_MUTED);
+                g2.setFont(UIConstants.FONT_BODY.deriveFont(16f));
+                String s = "Camera is off";
+                int sw = g2.getFontMetrics().stringWidth(s);
+                g2.drawString(s, (w - sw) / 2, h / 2 + 80);
+            } else {
+                float x1 = (float) (w * (0.5 + 0.3 * Math.sin(waveOffset)));
+                float y1 = (float) (h * (0.3 + 0.2 * Math.cos(waveOffset * 0.7)));
+                float x2 = (float) (w * (0.2 + 0.4 * Math.cos(waveOffset * 1.3)));
+                float y2 = (float) (h * (0.7 + 0.15 * Math.sin(waveOffset * 0.9)));
+
+                Point2D center = new Point2D.Float(x1, y1);
+                float radius = Math.max(w, h) * 0.8f;
+                float[] dist = {0.0f, 0.5f, 1.0f};
+                Color[] colors = {
+                    new Color(13, 148, 136, 120),
+                    new Color(79, 70, 229, 90),
+                    new Color(15, 23, 42, 255)
+                };
+
+                java.awt.RadialGradientPaint radial = new java.awt.RadialGradientPaint(
+                    center, radius, dist, colors
+                );
+                g2.setPaint(radial);
+                g2.fillRect(0, 0, w, h);
+
+                Point2D center2 = new Point2D.Float(x2, y2);
+                Color[] colors2 = {
+                    new Color(124, 58, 237, 70),
+                    new Color(13, 148, 136, 50),
+                    new Color(0, 0, 0, 0)
+                };
+                java.awt.RadialGradientPaint radial2 = new java.awt.RadialGradientPaint(
+                    center2, radius * 0.7f, dist, colors2
+                );
+                g2.setPaint(radial2);
+                g2.fillRect(0, 0, w, h);
+            }
+            g2.dispose();
+        }
+    }
+
+    /**
+     * Bắt đầu cuộc gọi tới peer đang chọn.
+     */
+    private void startCallWithPeer(WebRtcManager.MediaType mediaType) {
+        if (selectedPeer == null) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Vui lòng chọn một người dùng để gọi.", "Chưa chọn người dùng",
+                    javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (webRtcManager.isInCall()) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Đang trong một cuộc gọi khác.", "Bận",
+                    javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String peer = selectedPeer;
+        String typeLabel = mediaType == WebRtcManager.MediaType.VIDEO ? "Video" : "Thoại";
+
+        showActiveCallDialog(peer, mediaType, true);
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                webRtcManager.startCall(peer, mediaType);
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    flow("Gọi " + typeLabel, "Đang chờ " + peer + " bắt máy...",
+                            ActivityFlowPanel.Tone.INFO);
+                } catch (Exception ex) {
+                    log.error("startCall failed", ex);
+                    flow("Gọi thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    if (activeCallDialog != null) activeCallDialog.dispose();
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Hiển thị Dialog cuộc gọi đang hoạt động.
+     */
+    private void showActiveCallDialog(String peer, WebRtcManager.MediaType mediaType, boolean isCaller) {
+        if (activeCallDialog != null) activeCallDialog.dispose();
+
+        javax.swing.JFrame topFrame = (javax.swing.JFrame)
+                javax.swing.SwingUtilities.getWindowAncestor(this);
+
+        String callTypeIcon = mediaType == WebRtcManager.MediaType.VIDEO ? "📹" : "📞";
+        activeCallDialog = new javax.swing.JDialog(topFrame,
+                "Cuộc gọi — " + peer, false);
+
+        if (mediaType == WebRtcManager.MediaType.AUDIO) {
+            activeCallDialog.setSize(360, 340);
+            activeCallDialog.setResizable(false);
+            activeCallDialog.setLocationRelativeTo(this);
+
+            JPanel panel = new JPanel() {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SURFACE);
+                    g2.fillRect(0, 0, getWidth(), getHeight());
+                    java.awt.GradientPaint glow = new java.awt.GradientPaint(
+                            0, 0, new Color(0, 161, 156, 30),
+                            getWidth(), getHeight(), new Color(0, 0, 0, 0));
+                    g2.setPaint(glow);
+                    g2.fillRect(0, 0, getWidth(), getHeight());
+                    g2.dispose();
+                }
+            };
+            panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+            panel.setBorder(new EmptyBorder(30, 30, 30, 30));
+
+            AvatarBadge callAvatar = new AvatarBadge(peer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
+            callAvatar.setPreferredSize(new Dimension(72, 72));
+            callAvatar.setMaximumSize(new Dimension(72, 72));
+            callAvatar.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+            panel.add(callAvatar);
+            panel.add(Box.createVerticalStrut(14));
+
+            JLabel peerLabel = UiStyles.headingLabel(peer);
+            peerLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+            peerLabel.setForeground(UIConstants.TEXT_WHITE);
+            panel.add(peerLabel);
+            panel.add(Box.createVerticalStrut(6));
+
+            JLabel statusLabel = UiStyles.mutedLabel(isCaller ? "Đang gọi..." : "Cuộc gọi thoại");
+            statusLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+            statusLabel.setForeground(UIConstants.SECURE_TEAL);
+            panel.add(statusLabel);
+            panel.add(Box.createVerticalStrut(4));
+
+            JLabel e2eeLabel = UiStyles.mutedLabel("🔒 Cuộc gọi được bảo mật");
+            e2eeLabel.setFont(UIConstants.FONT_SMALL.deriveFont(10f));
+            e2eeLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+            e2eeLabel.setForeground(new Color(0, 161, 156, 180));
+            panel.add(e2eeLabel);
+            panel.add(Box.createVerticalGlue());
+
+            JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 20, 0));
+            btnRow.setOpaque(false);
+
+            JButton endBtn = new JButton("      Kết thúc") {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SIGNAL_RED);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    
+                    // Draw hangup icon
+                    g2.setColor(Color.WHITE);
+                    int size = 16;
+                    int ix = 16;
+                    int iy = (getHeight() - size) / 2;
+                    Path2D.Double path = new Path2D.Double();
+                    path.moveTo(ix + 1, iy + 9);
+                    path.quadTo(ix + 8, iy + 3, ix + 15, iy + 9);
+                    path.lineTo(ix + 13, iy + 12);
+                    path.quadTo(ix + 8, iy + 7, ix + 3, iy + 12);
+                    path.closePath();
+                    g2.fill(path);
+                    g2.dispose();
+                    
+                    super.paintComponent(g);
+                }
+            };
+            endBtn.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+            endBtn.setForeground(Color.WHITE);
+            endBtn.setFocusPainted(false);
+            endBtn.setBorderPainted(false);
+            endBtn.setContentAreaFilled(false);
+            endBtn.setOpaque(false);
+            endBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            endBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
+            endBtn.setPreferredSize(new Dimension(140, 42));
+            endBtn.addActionListener(e -> endCallAction());
+            btnRow.add(endBtn);
+            panel.add(btnRow);
+
+            activeCallDialog.setContentPane(panel);
+        } else {
+            activeCallDialog.setSize(640, 520);
+            activeCallDialog.setLocationRelativeTo(this);
+            
+            VideoMeshPanel meshPanel = new VideoMeshPanel(peer, username);
+            meshPanel.setSize(640, 520);
+
+            JPanel centerInfo = new JPanel();
+            centerInfo.setOpaque(false);
+            centerInfo.setLayout(new BoxLayout(centerInfo, BoxLayout.Y_AXIS));
+            
+            AvatarBadge bigAvatar = new AvatarBadge(peer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
+            bigAvatar.setPreferredSize(new Dimension(100, 100));
+            bigAvatar.setMaximumSize(new Dimension(100, 100));
+            bigAvatar.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+            
+            JLabel peerLabel = new JLabel("@" + peer);
+            peerLabel.setFont(UIConstants.FONT_HEADING.deriveFont(Font.BOLD, 20f));
+            peerLabel.setForeground(UIConstants.TEXT_WHITE);
+            peerLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+
+            activeCallStateLbl = new JLabel(isCaller ? "Đang kết nối..." : "Đang kết nối video...");
+            activeCallStateLbl.setFont(UIConstants.FONT_BODY.deriveFont(13f));
+            activeCallStateLbl.setForeground(UIConstants.SECURE_TEAL);
+            activeCallStateLbl.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+
+            centerInfo.add(bigAvatar);
+            centerInfo.add(Box.createVerticalStrut(12));
+            centerInfo.add(peerLabel);
+            centerInfo.add(Box.createVerticalStrut(6));
+            centerInfo.add(activeCallStateLbl);
+            centerInfo.setBounds(170, 100, 300, 180);
+            meshPanel.add(centerInfo);
+
+            JPanel pipPanel = new JPanel() {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(new Color(15, 23, 42, 200));
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 16, 16);
+                    g2.setColor(new Color(255, 255, 255, 20));
+                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 16, 16);
+                    g2.dispose();
+                }
+            };
+            pipPanel.setLayout(new BorderLayout());
+            pipPanel.setOpaque(false);
+            pipPanel.setBounds(470, 20, 140, 180);
+            pipPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+            AvatarBadge pipAvatar = new AvatarBadge(username, Color.decode("#10B981"), UIConstants.SECURE_TEAL);
+            pipAvatar.setPreferredSize(new Dimension(64, 64));
+            
+            JLabel pipTitle = new JLabel("Bạn (Webcam)");
+            pipTitle.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD, 10f));
+            pipTitle.setForeground(UIConstants.TEXT_MUTED);
+            pipTitle.setHorizontalAlignment(JLabel.CENTER);
+
+            JPanel pipInner = new JPanel(new BorderLayout());
+            pipInner.setOpaque(false);
+            pipInner.add(pipAvatar, BorderLayout.CENTER);
+            pipInner.add(pipTitle, BorderLayout.SOUTH);
+            pipPanel.add(pipInner, BorderLayout.CENTER);
+            meshPanel.add(pipPanel);
+
+            JPanel controlBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 24, 12)) {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(new Color(15, 23, 42, 220));
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 24, 24);
+                    g2.setColor(new Color(255, 255, 255, 15));
+                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 24, 24);
+                    g2.dispose();
+                }
+            };
+            controlBar.setOpaque(false);
+            controlBar.setBounds(140, 390, 360, 64);
+
+            JButton micBtn = new JButton("") {
+                private boolean active = true;
+                {
+                    setFont(UIConstants.FONT_BODY.deriveFont(16f));
+                    setPreferredSize(new Dimension(40, 40));
+                    setMargin(new java.awt.Insets(0, 0, 0, 0));
+                    setBorder(BorderFactory.createEmptyBorder());
+                    setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+                    setVerticalAlignment(javax.swing.SwingConstants.CENTER);
+                    setFocusPainted(false);
+                    setBorderPainted(false);
+                    setContentAreaFilled(false);
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    setToolTipText("Tắt Mic");
+                    addActionListener(e -> {
+                        active = !active;
+                        webRtcManager.setMicMuted(!active);
+                        setToolTipText(active ? "Tắt Mic" : "Bật Mic");
+                        repaint();
+                    });
+                }
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(active ? new Color(255, 255, 255, 20) : UIConstants.SIGNAL_RED);
+                    g2.fillOval(0, 0, getWidth(), getHeight());
+                    
+                    // Draw modern microphone vector icon
+                    g2.setColor(Color.WHITE);
+                    g2.setStroke(new BasicStroke(1.8f));
+                    int size = 16;
+                    int ix = (getWidth() - size) / 2;
+                    int iy = (getHeight() - size) / 2;
+                    
+                    // Mic capsule
+                    g2.drawRoundRect(ix + 5, iy + 1, 6, 9, 6, 6);
+                    if (active) {
+                        g2.fillRoundRect(ix + 5, iy + 1, 6, 9, 6, 6);
+                    }
+                    // Mic stand (U-shape)
+                    g2.drawArc(ix + 2, iy + 4, 12, 8, 180, 180);
+                    // Stand stem & base
+                    g2.drawLine(ix + 8, iy + 12, ix + 8, iy + 15);
+                    g2.drawLine(ix + 5, iy + 15, ix + 11, iy + 15);
+                    
+                    // Slash if muted
+                    if (!active) {
+                        g2.setStroke(new BasicStroke(2.0f));
+                        g2.drawLine(ix + 1, iy + 1, ix + 15, iy + 15);
+                    }
+                    g2.dispose();
+                }
+            };
+            micBtn.setForeground(Color.WHITE);
+
+            JButton camBtn = new JButton("") {
+                private boolean active = true;
+                {
+                    setFont(UIConstants.FONT_BODY.deriveFont(16f));
+                    setPreferredSize(new Dimension(40, 40));
+                    setMargin(new java.awt.Insets(0, 0, 0, 0));
+                    setBorder(BorderFactory.createEmptyBorder());
+                    setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+                    setVerticalAlignment(javax.swing.SwingConstants.CENTER);
+                    setFocusPainted(false);
+                    setBorderPainted(false);
+                    setContentAreaFilled(false);
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    setToolTipText("Tắt Camera");
+                    addActionListener(e -> {
+                        active = !active;
+                        setToolTipText(active ? "Bật Camera" : "Tắt Camera");
+                        meshPanel.repaint();
+                        pipPanel.setVisible(active);
+                        repaint();
+                    });
+                }
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(active ? new Color(255, 255, 255, 20) : UIConstants.SIGNAL_RED);
+                    g2.fillOval(0, 0, getWidth(), getHeight());
+                    
+                    // Draw modern camera vector icon
+                    g2.setColor(Color.WHITE);
+                    g2.setStroke(new BasicStroke(1.8f));
+                    int size = 16;
+                    int ix = (getWidth() - size) / 2;
+                    int iy = (getHeight() - size) / 2;
+                    
+                    // Camera body
+                    g2.drawRoundRect(ix, iy + 3, 10, 8, 2, 2);
+                    if (active) {
+                        g2.fillRoundRect(ix, iy + 3, 10, 8, 2, 2);
+                    }
+                    // Camera lens
+                    int[] px = {ix + 10, ix + 15, ix + 15, ix + 10};
+                    int[] py = {iy + 6, iy + 3, iy + 11, iy + 8};
+                    g2.drawPolygon(px, py, 4);
+                    if (active) {
+                        g2.fillPolygon(px, py, 4);
+                    }
+                    
+                    // Slash if camera is off
+                    if (!active) {
+                        g2.setStroke(new BasicStroke(2.0f));
+                        g2.drawLine(ix - 1, iy + 1, ix + 16, iy + 14);
+                    }
+                    g2.dispose();
+                }
+            };
+            camBtn.setForeground(Color.WHITE);
+
+            JButton hangupBtn = new JButton("") {
+                {
+                    setFont(UIConstants.FONT_BODY.deriveFont(18f));
+                    setPreferredSize(new Dimension(44, 44));
+                    setMargin(new java.awt.Insets(0, 0, 0, 0));
+                    setBorder(BorderFactory.createEmptyBorder());
+                    setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+                    setVerticalAlignment(javax.swing.SwingConstants.CENTER);
+                    setFocusPainted(false);
+                    setBorderPainted(false);
+                    setContentAreaFilled(false);
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    setToolTipText("Kết thúc cuộc gọi");
+                    addActionListener(e -> endCallAction());
+                }
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SIGNAL_RED);
+                    g2.fillOval(0, 0, getWidth(), getHeight());
+                    
+                    // Draw modern hangup phone receiver icon
+                    g2.setColor(Color.WHITE);
+                    int size = 16;
+                    int ix = (getWidth() - size) / 2;
+                    int iy = (getHeight() - size) / 2;
+                    Path2D.Double path = new Path2D.Double();
+                    path.moveTo(ix + 1, iy + 9);
+                    path.quadTo(ix + 8, iy + 3, ix + 15, iy + 9);
+                    path.lineTo(ix + 13, iy + 12);
+                    path.quadTo(ix + 8, iy + 7, ix + 3, iy + 12);
+                    path.closePath();
+                    g2.fill(path);
+                    g2.dispose();
+                }
+            };
+            hangupBtn.setForeground(Color.WHITE);
+
+            controlBar.add(micBtn);
+            controlBar.add(camBtn);
+            controlBar.add(hangupBtn);
+            meshPanel.add(controlBar);
+
+            JPanel e2eeBanner = new JPanel() {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(new Color(0, 161, 156, 35));
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
+                    g2.setColor(new Color(0, 161, 156, 100));
+                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
+                    g2.dispose();
+                }
+            };
+            e2eeBanner.setOpaque(false);
+            e2eeBanner.setBounds(20, 20, 240, 32);
+            e2eeBanner.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 6));
+            JLabel bannerLabel = new JLabel("🔒 CUỘC GỌI VIDEO");
+            bannerLabel.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 10f));
+            bannerLabel.setForeground(UIConstants.SECURE_TEAL);
+            e2eeBanner.add(bannerLabel);
+            meshPanel.add(e2eeBanner);
+
+            activeCallDialog.setContentPane(meshPanel);
+            
+            activeCallDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosed(java.awt.event.WindowEvent e) {
+                    meshPanel.cleanup();
+                }
+            });
+        }
+
+        activeCallDialog.getContentPane().setBackground(UIConstants.SURFACE);
+        activeCallDialog.setVisible(true);
+    }
+
+    /**
+     * Hiển thị dialog cuộc gọi đến.
+     */
+    private void showIncomingCallDialog(CallSignalDto signal) {
+        if (activeCallDialog != null) activeCallDialog.dispose();
+
+        pendingInboundCall = signal;
+        WebRtcManager.MediaType mediaType = "VIDEO".equalsIgnoreCase(signal.getMediaType())
+                ? WebRtcManager.MediaType.VIDEO : WebRtcManager.MediaType.AUDIO;
+        String caller = signal.getCallerId();
+        String icon = mediaType == WebRtcManager.MediaType.VIDEO ? "📹" : "📞";
+
+        javax.swing.JFrame topFrame = (javax.swing.JFrame)
+                javax.swing.SwingUtilities.getWindowAncestor(this);
+
+        activeCallDialog = new javax.swing.JDialog(topFrame,
+                "Cuộc gọi đến từ " + caller, false);
+        activeCallDialog.setSize(380, 330);
+        activeCallDialog.setResizable(false);
+        activeCallDialog.setLocationRelativeTo(this);
+
+        JPanel panel = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setColor(UIConstants.SURFACE);
+                g2.fillRect(0, 0, getWidth(), getHeight());
+                java.awt.GradientPaint glow = new java.awt.GradientPaint(
+                        0, 0, new Color(0, 161, 156, 25),
+                        getWidth(), getHeight(), new Color(0, 0, 0, 0));
+                g2.setPaint(glow);
+                g2.fillRect(0, 0, getWidth(), getHeight());
+                g2.dispose();
+            }
+        };
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(28, 28, 28, 28));
+
+        AvatarBadge avatar = new AvatarBadge(caller, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
+        avatar.setPreferredSize(new Dimension(60, 60));
+        avatar.setMaximumSize(new Dimension(60, 60));
+        avatar.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        panel.add(avatar);
+        panel.add(Box.createVerticalStrut(12));
+
+        JLabel callerLabel = UiStyles.headingLabel(caller);
+        callerLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        panel.add(callerLabel);
+        panel.add(Box.createVerticalStrut(4));
+
+        JLabel typeLabel = UiStyles.mutedLabel(icon + " Cuộc gọi " +
+                (mediaType == WebRtcManager.MediaType.VIDEO ? "video" : "thoại") + " đến");
+        typeLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
+        typeLabel.setForeground(UIConstants.SECURE_TEAL);
+        panel.add(typeLabel);
+        panel.add(Box.createVerticalGlue());
+
+        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 16, 0));
+        btnRow.setOpaque(false);
+
+        JButton rejectBtn = new JButton("      Từ chối") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(UIConstants.SIGNAL_RED);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                
+                // Draw hangup icon
+                g2.setColor(Color.WHITE);
+                int size = 16;
+                int ix = 16;
+                int iy = (getHeight() - size) / 2;
+                Path2D.Double path = new Path2D.Double();
+                path.moveTo(ix + 1, iy + 9);
+                path.quadTo(ix + 8, iy + 3, ix + 15, iy + 9);
+                path.lineTo(ix + 13, iy + 12);
+                path.quadTo(ix + 8, iy + 7, ix + 3, iy + 12);
+                path.closePath();
+                g2.fill(path);
+                g2.dispose();
+                
+                super.paintComponent(g);
+            }
+        };
+        rejectBtn.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+        rejectBtn.setForeground(Color.WHITE);
+        rejectBtn.setFocusPainted(false);
+        rejectBtn.setBorderPainted(false);
+        rejectBtn.setContentAreaFilled(false);
+        rejectBtn.setOpaque(false);
+        rejectBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        rejectBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
+        rejectBtn.setPreferredSize(new Dimension(140, 42));
+        rejectBtn.addActionListener(e -> rejectCallAction());
+        btnRow.add(rejectBtn);
+
+        JButton acceptBtn = new JButton("      Bắt máy") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(UIConstants.SECURE_TEAL);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                
+                // Draw accept icon
+                g2.setColor(Color.WHITE);
+                int size = 16;
+                int ix = 16;
+                int iy = (getHeight() - size) / 2;
+                Path2D.Double path = new Path2D.Double();
+                path.moveTo(ix + 3, iy + 1);
+                path.lineTo(ix + 6, iy + 1);
+                path.quadTo(ix + 7, iy + 4, ix + 5, iy + 6);
+                path.lineTo(ix + 9, iy + 10);
+                path.quadTo(ix + 11, iy + 8, ix + 14, iy + 9);
+                path.lineTo(ix + 14, iy + 12);
+                path.quadTo(ix + 10, iy + 15, ix + 5, iy + 10);
+                path.quadTo(ix + 0, iy + 5, ix + 3, iy + 1);
+                path.closePath();
+                g2.fill(path);
+                g2.dispose();
+                
+                super.paintComponent(g);
+            }
+        };
+        acceptBtn.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+        acceptBtn.setForeground(Color.WHITE);
+        acceptBtn.setFocusPainted(false);
+        acceptBtn.setBorderPainted(false);
+        acceptBtn.setContentAreaFilled(false);
+        acceptBtn.setOpaque(false);
+        acceptBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        acceptBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
+        acceptBtn.setPreferredSize(new Dimension(140, 42));
+        acceptBtn.addActionListener(e -> {
+            activeCallDialog.dispose();
+            acceptCallAction();
+        });
+        btnRow.add(acceptBtn);
+        panel.add(btnRow);
+
+        activeCallDialog.setContentPane(panel);
+        activeCallDialog.setVisible(true);
+    }
+
+    /** Thanh điều khiển cuộc gọi */
+    private void updateCallControlBar(WebRtcManager.CallState state, String peer, WebRtcManager.MediaType mediaType) {
+        if (state == WebRtcManager.CallState.IDLE || state == WebRtcManager.CallState.ENDED) {
+            callControlBar.setVisible(false);
+            callControlBar.removeAll();
+            revalidate();
+            repaint();
+            return;
+        }
+
+        callControlBar.removeAll();
+        callControlBar.setVisible(true);
+        callControlBar.setOpaque(true);
+        callControlBar.setBackground(new Color(15, 23, 42));
+        callControlBar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, UIConstants.GLASS_BORDER),
+                new EmptyBorder(10, 20, 10, 20)));
+
+        String callTypeStr = mediaType == WebRtcManager.MediaType.VIDEO ? "gọi video" : "gọi thoại";
+        String statusText = "";
+        boolean showAccept = false;
+        boolean showReject = false;
+        boolean showHangup = false;
+
+        boolean isCaller = false;
+        WebRtcManager.ActiveCall active = webRtcManager.getActiveCall();
+        if (active != null) {
+            isCaller = active.isCaller();
+        } else if (pendingInboundCall != null) {
+            isCaller = false;
+        }
+
+        switch (state) {
+            case RINGING -> {
+                if (isCaller) {
+                    statusText = "Đang gọi " + callTypeStr + " tới @" + peer + "... Đang đổ chuông";
+                    showHangup = true;
+                } else {
+                    statusText = "Cuộc " + callTypeStr + " đến từ @" + peer + "...";
+                    showAccept = true;
+                    showReject = true;
+                }
+            }
+            case CONNECTING -> {
+                statusText = "Đang kết nối cuộc " + callTypeStr + " với @" + peer + "...";
+                showHangup = true;
+            }
+            case ACTIVE -> {
+                statusText = "Cuộc " + callTypeStr + " đang hoạt động với @" + peer;
+                showHangup = true;
+            }
+        }
+
+        JLabel label = new JLabel(statusText);
+        label.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 13f));
+        label.setForeground(UIConstants.TEXT_WHITE);
+        
+        JPanel dotPanel = new JPanel() {
+            private float alpha = 1.0f;
+            private javax.swing.Timer blinkTimer = new javax.swing.Timer(300, e -> {
+                alpha = alpha == 1.0f ? 0.2f : 1.0f;
+                repaint();
+            });
+            {
+                setOpaque(false);
+                setPreferredSize(new java.awt.Dimension(16, 16));
+                blinkTimer.start();
+            }
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(state == WebRtcManager.CallState.ACTIVE ? UIConstants.SECURE_TEAL : UIConstants.SIGNAL_RED);
+                g2.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha));
+                g2.fillOval(4, 4, 8, 8);
+                g2.dispose();
+            }
+        };
+        
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        left.setOpaque(false);
+        left.add(dotPanel);
+        left.add(label);
+        callControlBar.add(left, BorderLayout.WEST);
+
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        right.setOpaque(false);
+
+        if (showAccept) {
+            JButton accept = new JButton("      Trả lời") {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SECURE_TEAL);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    
+                    // Draw accept icon
+                    g2.setColor(Color.WHITE);
+                    int size = 16;
+                    int ix = 12;
+                    int iy = (getHeight() - size) / 2;
+                    Path2D.Double path = new Path2D.Double();
+                    path.moveTo(ix + 3, iy + 1);
+                    path.lineTo(ix + 6, iy + 1);
+                    path.quadTo(ix + 7, iy + 4, ix + 5, iy + 6);
+                    path.lineTo(ix + 9, iy + 10);
+                    path.quadTo(ix + 11, iy + 8, ix + 14, iy + 9);
+                    path.lineTo(ix + 14, iy + 12);
+                    path.quadTo(ix + 10, iy + 15, ix + 5, iy + 10);
+                    path.quadTo(ix + 0, iy + 5, ix + 3, iy + 1);
+                    path.closePath();
+                    g2.fill(path);
+                    g2.dispose();
+                    
+                    super.paintComponent(g);
+                }
+            };
+            accept.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+            accept.setForeground(Color.WHITE);
+            accept.setFocusPainted(false);
+            accept.setBorderPainted(false);
+            accept.setContentAreaFilled(false);
+            accept.setOpaque(false);
+            accept.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            accept.setBorder(new EmptyBorder(8, 16, 8, 16));
+            Dimension pref = accept.getPreferredSize();
+            accept.setPreferredSize(new Dimension(Math.max(120, pref.width), 34));
+            accept.addActionListener(e -> acceptCallAction());
+            right.add(accept);
+        }
+        if (showReject) {
+            JButton reject = new JButton("      Từ chối") {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SIGNAL_RED);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    
+                    // Draw hangup icon
+                    g2.setColor(Color.WHITE);
+                    int size = 16;
+                    int ix = 12;
+                    int iy = (getHeight() - size) / 2;
+                    Path2D.Double path = new Path2D.Double();
+                    path.moveTo(ix + 1, iy + 9);
+                    path.quadTo(ix + 8, iy + 3, ix + 15, iy + 9);
+                    path.lineTo(ix + 13, iy + 12);
+                    path.quadTo(ix + 8, iy + 7, ix + 3, iy + 12);
+                    path.closePath();
+                    g2.fill(path);
+                    g2.dispose();
+                    
+                    super.paintComponent(g);
+                }
+            };
+            reject.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+            reject.setForeground(Color.WHITE);
+            reject.setFocusPainted(false);
+            reject.setBorderPainted(false);
+            reject.setContentAreaFilled(false);
+            reject.setOpaque(false);
+            reject.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            reject.setBorder(new EmptyBorder(8, 16, 8, 16));
+            Dimension pref = reject.getPreferredSize();
+            reject.setPreferredSize(new Dimension(Math.max(120, pref.width), 34));
+            reject.addActionListener(e -> rejectCallAction());
+            right.add(reject);
+        }
+        if (showHangup) {
+            JButton hangup = new JButton("      Cúp máy") {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(UIConstants.SIGNAL_RED);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                    
+                    // Draw hangup icon
+                    g2.setColor(Color.WHITE);
+                    int size = 16;
+                    int ix = 12;
+                    int iy = (getHeight() - size) / 2;
+                    Path2D.Double path = new Path2D.Double();
+                    path.moveTo(ix + 1, iy + 9);
+                    path.quadTo(ix + 8, iy + 3, ix + 15, iy + 9);
+                    path.lineTo(ix + 13, iy + 12);
+                    path.quadTo(ix + 8, iy + 7, ix + 3, iy + 12);
+                    path.closePath();
+                    g2.fill(path);
+                    g2.dispose();
+                    
+                    super.paintComponent(g);
+                }
+            };
+            hangup.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD));
+            hangup.setForeground(Color.WHITE);
+            hangup.setFocusPainted(false);
+            hangup.setBorderPainted(false);
+            hangup.setContentAreaFilled(false);
+            hangup.setOpaque(false);
+            hangup.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            hangup.setBorder(new EmptyBorder(8, 16, 8, 16));
+            Dimension pref = hangup.getPreferredSize();
+            hangup.setPreferredSize(new Dimension(Math.max(120, pref.width), 34));
+            hangup.addActionListener(e -> endCallAction());
+            right.add(hangup);
+        }
+
+        callControlBar.add(right, BorderLayout.EAST);
+        revalidate();
+        repaint();
+    }
+
+    private void acceptCallAction() {
+        CallSignalDto s = pendingInboundCall;
+        if (s == null) return;
+        new SwingWorker<Void, Void>() {
+            @Override protected Void doInBackground() throws Exception {
+                webRtcManager.acceptCall(s);
+                return null;
+            }
+            @Override protected void done() {
+                pendingInboundCall = null;
+                WebRtcManager.MediaType mediaType = "VIDEO".equalsIgnoreCase(s.getMediaType())
+                        ? WebRtcManager.MediaType.VIDEO : WebRtcManager.MediaType.AUDIO;
+                if (mediaType == WebRtcManager.MediaType.VIDEO) {
+                    showActiveCallDialog(s.getCallerId(), mediaType, false);
+                }
+            }
+        }.execute();
+    }
+
+    private void rejectCallAction() {
+        CallSignalDto s = pendingInboundCall;
+        if (s == null) return;
+        new SwingWorker<Void, Void>() {
+            @Override protected Void doInBackground() throws Exception {
+                webRtcManager.rejectCall(s);
+                return null;
+            }
+            @Override protected void done() {
+                pendingInboundCall = null;
+                updateCallControlBar(WebRtcManager.CallState.IDLE, null, null);
+            }
+        }.execute();
+    }
+
+    private void endCallAction() {
+        new SwingWorker<Void, Void>() {
+            @Override protected Void doInBackground() throws Exception {
+                webRtcManager.endCall();
+                return null;
+            }
+            @Override protected void done() {
+                updateCallControlBar(WebRtcManager.CallState.IDLE, null, null);
+            }
+        }.execute();
+    }
+
+    /** Callback khi trạng thái cuộc gọi thay đổi. */
+    private void onCallStateChanged(WebRtcManager.CallState state) {
+        String peer = "";
+        WebRtcManager.MediaType mediaType = WebRtcManager.MediaType.AUDIO;
+        
+        WebRtcManager.ActiveCall active = webRtcManager.getActiveCall();
+        if (active != null) {
+            peer = active.peerId();
+            mediaType = active.mediaType();
+        } else if (pendingInboundCall != null) {
+            peer = pendingInboundCall.getCallerId();
+            mediaType = "VIDEO".equalsIgnoreCase(pendingInboundCall.getMediaType())
+                    ? WebRtcManager.MediaType.VIDEO : WebRtcManager.MediaType.AUDIO;
+        }
+
+        updateCallControlBar(state, peer, mediaType);
+
+        if (activeCallDialog != null && activeCallDialog.isVisible() && mediaType == WebRtcManager.MediaType.VIDEO) {
+            String stateStr = switch (state) {
+                case RINGING -> "Đang đổ chuông...";
+                case CONNECTING -> "Đang kết nối...";
+                case ACTIVE -> "Cuộc gọi đang hoạt động 🔒";
+                case ENDED -> "Cuộc gọi đã kết thúc";
+                default -> state.name();
+            };
+            if (activeCallStateLbl != null) {
+                activeCallStateLbl.setText(stateStr);
+            }
+        }
+
+        String msg = switch (state) {
+            case RINGING -> "Đang đổ chuông...";
+            case CONNECTING -> "Đang kết nối...";
+            case ACTIVE -> "Cuộc gọi đang hoạt động 🔒";
+            case ENDED -> "Cuộc gọi đã kết thúc";
+            default -> state.name();
+        };
+        flow("Cuộc gọi", msg,
+                state == WebRtcManager.CallState.ACTIVE ? ActivityFlowPanel.Tone.SUCCESS
+                : state == WebRtcManager.CallState.ENDED ? ActivityFlowPanel.Tone.INFO
+                : ActivityFlowPanel.Tone.INFO);
+
+        if (state == WebRtcManager.CallState.ENDED) {
+            pendingInboundCall = null;
+            activeCallStateLbl = null;
+            if (activeCallDialog != null) {
+                activeCallDialog.dispose();
+                activeCallDialog = null;
+            }
+        }
+    }
+
+    /** Callback khi peer kết thúc cuộc gọi. */
+    private void onCallEndedByPeer(String peerId) {
+        flow("Cuộc gọi kết thúc", peerId + " đã cúp máy.", ActivityFlowPanel.Tone.INFO);
+        updateCallControlBar(WebRtcManager.CallState.ENDED, peerId, WebRtcManager.MediaType.AUDIO);
+        if (activeCallDialog != null) {
+            activeCallDialog.dispose();
+            activeCallDialog = null;
+        }
+    }
+
+    /** Xử lý tín hiệu cuộc gọi đến trên UI (chạy trên EDT). */
+    private void handleIncomingCallSignalUI(CallSignalDto signal) {
+        if ("SDP_OFFER".equals(signal.getSignalType())) {
+            pendingInboundCall = signal;
+            WebRtcManager.MediaType mediaType = "VIDEO".equalsIgnoreCase(signal.getMediaType())
+                    ? WebRtcManager.MediaType.VIDEO : WebRtcManager.MediaType.AUDIO;
+            updateCallControlBar(WebRtcManager.CallState.RINGING, signal.getCallerId(), mediaType);
+            showIncomingCallDialog(signal);
+        }
+    }
+
+
 
     private void markPreKeyAvailable(String peer) {
         if (peer == null || peer.equals(username)) {
@@ -1011,16 +2555,24 @@ public class ChatPanel extends JPanel {
     }
 
     private void addMessageBubble(String text, boolean outgoing, String time) {
+        addMessageBubble(text, outgoing, time, null);
+    }
+
+    private void addMessageBubble(String text, boolean outgoing, String time, String senderId) {
         if (this.messageCount == 0) {
             messageContainer.removeAll();
             messageContainer.add(Box.createVerticalGlue());
         }
-        addMessageBubbleInternal(text, outgoing, time);
+        addMessageBubbleInternal(text, outgoing, time, senderId);
         this.messageCount++;
         scrollMessagesToEnd();
     }
 
     private void addMessageBubbleInternal(String text, boolean outgoing, String time) {
+        addMessageBubbleInternal(text, outgoing, time, null);
+    }
+
+    private void addMessageBubbleInternal(String text, boolean outgoing, String time, String senderId) {
         JPanel row = new JPanel(new FlowLayout(
                 outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 4));
         row.setOpaque(false);
@@ -1028,7 +2580,7 @@ public class ChatPanel extends JPanel {
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         if (!outgoing) {
-            AvatarBadge avatar = new AvatarBadge(selectedPeer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
+            AvatarBadge avatar = new AvatarBadge(senderId != null ? senderId : selectedPeer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
             avatar.setPreferredSize(new Dimension(26, 26));
             row.add(avatar);
             row.add(Box.createHorizontalStrut(8));
@@ -1037,6 +2589,14 @@ public class ChatPanel extends JPanel {
         JPanel bubbleAndMeta = new JPanel();
         bubbleAndMeta.setLayout(new BoxLayout(bubbleAndMeta, BoxLayout.Y_AXIS));
         bubbleAndMeta.setOpaque(false);
+
+        if (!outgoing && senderId != null && selectedPeer != null && selectedPeer.startsWith("group-")) {
+            JLabel senderLabel = new JLabel("@" + senderId);
+            senderLabel.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD, 11f));
+            senderLabel.setForeground(UIConstants.SECURE_TEAL);
+            senderLabel.setBorder(new EmptyBorder(0, 6, 2, 0));
+            bubbleAndMeta.add(senderLabel);
+        }
 
         MessageBubble bubble = new MessageBubble(text, outgoing);
         bubbleAndMeta.add(bubble);
@@ -1056,39 +2616,45 @@ public class ChatPanel extends JPanel {
 
     private static final class ConversationItem {
         private final String userId;
+        private String displayName;
         private boolean online;
         private boolean preKeyAvailable;
         private long lastSeenAt;
         private final boolean placeholder;
         private int unreadCount;
+        private boolean isGroup;
 
         private ConversationItem(String userId, boolean online, boolean preKeyAvailable,
-                long lastSeenAt, boolean placeholder) {
+                long lastSeenAt, boolean placeholder, boolean isGroup) {
             this.userId = userId;
             this.online = online;
             this.preKeyAvailable = preKeyAvailable;
             this.lastSeenAt = lastSeenAt;
             this.placeholder = placeholder;
+            this.isGroup = isGroup;
         }
 
         static ConversationItem placeholder(String text) {
-            return new ConversationItem(text, false, false, 0L, true);
+            return new ConversationItem(text, false, false, 0L, true, false);
         }
 
         static ConversationItem manual(String userId) {
-            return new ConversationItem(userId, false, false, 0L, false);
+            boolean isGrp = userId.startsWith("group-");
+            return new ConversationItem(userId, isGrp, false, 0L, false, isGrp);
         }
 
         static ConversationItem legacy(String userId) {
-            return new ConversationItem(userId, true, false, Instant.now().getEpochSecond(), false);
+            boolean isGrp = userId.startsWith("group-");
+            return new ConversationItem(userId, !isGrp, false, Instant.now().getEpochSecond(), false, isGrp);
         }
 
         static ConversationItem from(UserListEntry entry) {
             if (entry == null || entry.getUserId() == null || entry.getUserId().isBlank()) {
                 return null;
             }
+            boolean isGrp = entry.getUserId().startsWith("group-");
             return new ConversationItem(entry.getUserId(), entry.isOnline(),
-                    entry.isPreKeyAvailable(), entry.getLastSeenAt(), false);
+                    entry.isPreKeyAvailable(), entry.getLastSeenAt(), false, isGrp);
         }
 
         boolean isSelectable(String self) {
@@ -1104,12 +2670,19 @@ public class ChatPanel extends JPanel {
         }
 
         String displayName() {
-            return placeholder ? userId : userId;
+            if (placeholder) return userId;
+            if (displayName != null && !displayName.isEmpty()) {
+                return displayName;
+            }
+            return userId;
         }
 
         String statusText() {
             if (placeholder) {
                 return "Waiting for server...";
+            }
+            if (isGroup) {
+                return "Trò chuyện nhóm";
             }
             return online ? "Active now" : "Offline";
         }
@@ -1290,7 +2863,8 @@ public class ChatPanel extends JPanel {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             boolean online = UIConstants.SECURE_TEAL.equals(stroke);
-            g2.setColor(fill);
+            boolean isGroup = text != null && text.startsWith("group-");
+            g2.setColor(isGroup ? new Color(0, 150, 136) : fill);
             int avatarSize = Math.min(getWidth(), getHeight()) - (online ? 5 : 1);
             g2.fillOval(0, 0, avatarSize, avatarSize);
             String initials = initials(text);
@@ -1300,7 +2874,7 @@ public class ChatPanel extends JPanel {
             int x = (avatarSize - fm.stringWidth(initials)) / 2;
             int y = (avatarSize - fm.getHeight()) / 2 + fm.getAscent();
             g2.drawString(initials, x, y);
-            if (online) {
+            if (online && !isGroup) {
                 int dotSize = Math.max(7, getWidth() / 5);
                 g2.setColor(UIConstants.SECURE_TEAL);
                 g2.fillOval(getWidth() - dotSize - 1, getHeight() - dotSize - 1, dotSize, dotSize);
@@ -1315,6 +2889,9 @@ public class ChatPanel extends JPanel {
         private static String initials(String value) {
             if (value == null || value.isBlank()) {
                 return "SC";
+            }
+            if (value.startsWith("group-")) {
+                return "GP";
             }
             String clean = value.replace("@", "").trim();
             return clean.length() <= 2 ? clean.toUpperCase(java.util.Locale.ROOT)
@@ -1334,25 +2911,26 @@ public class ChatPanel extends JPanel {
             setLayout(new BorderLayout(0, 0));
             setOpaque(false);
 
-            int maxW = 300;
+            int maxW = 400; // Fits about 8-9 words per line
             JTextArea body = new JTextArea(text);
             body.setFont(UIConstants.FONT_BODY);
             body.setForeground(UIConstants.TEXT_SILVER);
             body.setBackground(bubbleColor);
-            body.setLineWrap(true);
             body.setWrapStyleWord(true);
             body.setEditable(false);
             body.setBorder(new EmptyBorder(10, 14, 10, 14));
             body.setOpaque(false);
+            body.setLineWrap(false);
 
             Dimension pref = body.getPreferredSize();
+            body.setLineWrap(true);
             int width;
-            if (pref.width <= maxW) {
-                width = Math.max(50, pref.width);
+            if (pref.width + 16 <= maxW) {
+                width = Math.max(70, pref.width + 16); // Added 16px buffer to avoid premature wrapping
             } else {
                 width = maxW;
             }
-            body.setSize(new Dimension(width, 1));
+            body.setSize(new Dimension(width, 9999));
             int height = body.getPreferredSize().height;
             
             Dimension size = new Dimension(width, height);

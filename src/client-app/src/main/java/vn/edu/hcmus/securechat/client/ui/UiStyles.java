@@ -274,8 +274,9 @@ public final class UiStyles {
         button.setContentAreaFilled(false);
         button.setOpaque(false);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setPreferredSize(new Dimension(0, 42));
         button.setBorder(new EmptyBorder(8, 20, 8, 20));
+        Dimension pref = button.getPreferredSize();
+        button.setPreferredSize(new Dimension(Math.max(120, pref.width), 42));
         return button;
     }
 

@@ -51,10 +51,11 @@ public class ClientApp extends JFrame {
     private ChatPanel chatPanel;
 
     public ClientApp() {
-        setTitle("SecureChat E2EE v2.0");
+        setTitle("SecureChat");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1024, 680));
         setSize(1100, 720);
+        setExtendedState(JFrame.MAXIMIZED_BOTH);
         setLocationRelativeTo(null);
         getContentPane().setBackground(UIConstants.DEEP_CARBON);
 

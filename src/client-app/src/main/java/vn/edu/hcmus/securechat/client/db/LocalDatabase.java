@@ -77,6 +77,14 @@ public class LocalDatabase {
                         + "timestamp INTEGER NOT NULL"
                         + ");";
                 stmt.execute(sql);
+                
+                String sqlGroup = "CREATE TABLE IF NOT EXISTS group_metadata ("
+                        + "group_id TEXT PRIMARY KEY,"
+                        + "group_name TEXT NOT NULL,"
+                        + "members TEXT NOT NULL"
+                        + ");";
+                stmt.execute(sqlGroup);
+
                 try {
                     stmt.execute("ALTER TABLE messages ADD COLUMN owner TEXT");
                 } catch (Exception ignored) {
@@ -92,6 +100,59 @@ public class LocalDatabase {
         } catch (Exception e) {
             log.error("Lỗi khi khởi tạo SQLite", e);
         }
+    }
+
+    public record GroupInfoRecord(String groupId, String groupName, String members) {}
+
+    public void saveGroup(String groupId, String groupName, String members) {
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "INSERT OR REPLACE INTO group_metadata(group_id, group_name, members) VALUES(?, ?, ?)")) {
+            pstmt.setString(1, groupId);
+            pstmt.setString(2, groupName);
+            pstmt.setString(3, members);
+            pstmt.executeUpdate();
+            log.info("Saved group metadata: groupId={}, name={}", groupId, groupName);
+        } catch (Exception e) {
+            log.error("Lỗi lưu metadata nhóm", e);
+        }
+    }
+
+    public void deleteGroup(String groupId) {
+        try (Connection conn = DriverManager.getConnection(jdbcUrl)) {
+            // Delete group metadata
+            try (PreparedStatement pstmt = conn.prepareStatement("DELETE FROM group_metadata WHERE group_id = ?")) {
+                pstmt.setString(1, groupId);
+                pstmt.executeUpdate();
+            }
+            // Delete group messages
+            try (PreparedStatement pstmt = conn.prepareStatement("DELETE FROM messages WHERE owner = ? AND peer = ?")) {
+                pstmt.setString(1, username);
+                pstmt.setString(2, groupId);
+                pstmt.executeUpdate();
+            }
+            log.info("Deleted group from local DB: groupId={}", groupId);
+        } catch (Exception e) {
+            log.error("Lỗi xóa nhóm khỏi DB", e);
+        }
+    }
+
+    public java.util.List<GroupInfoRecord> loadGroups() {
+        java.util.List<GroupInfoRecord> list = new java.util.ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT group_id, group_name, members FROM group_metadata")) {
+            while (rs.next()) {
+                list.add(new GroupInfoRecord(
+                        rs.getString("group_id"),
+                        rs.getString("group_name"),
+                        rs.getString("members")
+                ));
+            }
+        } catch (Exception e) {
+            log.error("Lỗi tải danh sách nhóm từ DB", e);
+        }
+        return list;
     }
 
     public void saveMessage(String owner, String peer, String sender, String content, long timestamp) {
