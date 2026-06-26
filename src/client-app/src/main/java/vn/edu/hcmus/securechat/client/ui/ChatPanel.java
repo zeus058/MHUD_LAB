@@ -13,6 +13,7 @@ import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.LinearGradientPaint;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
@@ -24,7 +25,10 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -112,6 +116,7 @@ public class ChatPanel extends JPanel {
     private JLabel activeCallStateLbl;
     private JButton phoneBtn;
     private JButton videoBtn;
+    private JButton membersBtn;
     private JButton deleteBtn;
 
     // === Managers cho tính năng mới ===
@@ -180,8 +185,8 @@ public class ChatPanel extends JPanel {
         add(chatWorkspace, BorderLayout.CENTER);
 
         activityPanel.seed(new String[][] {
-                {"Pre-Key đã upload", "Signed pre-key và one-time pre-key đã sẵn sàng cho peer offline.", "SUCCESS"},
-                {"Phiên truy cập đã mở", "ST, authenticator và Chat handshake đã được xác thực.", "SUCCESS"}
+                {"Pre-Key uploaded", "Signed pre-key and one-time pre-key are ready for offline peers.", "SUCCESS"},
+                {"Access session opened", "ST, authenticator, and Chat handshake have been verified.", "SUCCESS"}
         });
 
         startReceiverThread();
@@ -215,7 +220,7 @@ public class ChatPanel extends JPanel {
         titles.add(userLine);
         header.add(titles, BorderLayout.WEST);
 
-        JButton logout = UiStyles.ghostButton("Đăng xuất");
+        JButton logout = UiStyles.ghostButton("Log out");
         logout.setPreferredSize(new Dimension(112, 38));
         logout.addActionListener(e -> listener.onLogout());
         header.add(logout, BorderLayout.EAST);
@@ -351,7 +356,7 @@ public class ChatPanel extends JPanel {
         sidebar.add(top, BorderLayout.NORTH);
 
         userListModel = new DefaultListModel<>();
-        userListModel.addElement(ConversationItem.placeholder("Đang tải danh sách..."));
+        userListModel.addElement(ConversationItem.placeholder("Loading conversations..."));
 
         userList = new JList<>(userListModel);
         userList.setBackground(new Color(0, 0, 0, 0));
@@ -393,12 +398,12 @@ public class ChatPanel extends JPanel {
                         ConversationItem sel = userList.getSelectedValue();
                         if (sel != null && sel.isGroup && sel.isSelectable(username)) {
                             javax.swing.JPopupMenu popup = new javax.swing.JPopupMenu();
-                            javax.swing.JMenuItem deleteItem = new javax.swing.JMenuItem("Xóa nhóm");
+                            javax.swing.JMenuItem deleteItem = new javax.swing.JMenuItem("Delete group");
                             deleteItem.addActionListener(ae -> {
                                 int confirm = javax.swing.JOptionPane.showConfirmDialog(
                                     ChatPanel.this,
-                                    "Bạn có chắc chắn muốn xóa nhóm \"" + sel.displayName() + "\" không?\nLịch sử trò chuyện của nhóm cũng sẽ bị xóa.",
-                                    "Xác nhận xóa nhóm",
+                                    "Are you sure you want to delete group \"" + sel.displayName() + "\"?\nThe group's chat history will also be deleted.",
+                                    "Confirm group deletion",
                                     javax.swing.JOptionPane.YES_NO_OPTION,
                                     javax.swing.JOptionPane.WARNING_MESSAGE
                                 );
@@ -425,7 +430,7 @@ public class ChatPanel extends JPanel {
         userScroll.setOpaque(false);
         sidebar.add(userScroll, BorderLayout.CENTER);
 
-        // === Nút Tạo nhóm ở cuối sidebar ===
+        // === Create Group button at the bottom of the sidebar ===
         JPanel groupBtnPanel = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 0, 10)) {
             @Override
             protected void paintComponent(Graphics g) {
@@ -439,7 +444,7 @@ public class ChatPanel extends JPanel {
         groupBtnPanel.setOpaque(false);
         groupBtnPanel.setBorder(new EmptyBorder(2, 12, 12, 12));
 
-        JButton createGroupBtn = new JButton("✜ Tạo nhóm") {
+        JButton createGroupBtn = new JButton("✜ Create Group") {
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
@@ -460,7 +465,7 @@ public class ChatPanel extends JPanel {
         createGroupBtn.setFocusPainted(false);
         createGroupBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         createGroupBtn.setPreferredSize(new Dimension(CHAT_LIST_WIDTH - 24, 38));
-        createGroupBtn.setToolTipText("Tạo nhóm chat mới");
+        createGroupBtn.setToolTipText("Create a new group chat");
         createGroupBtn.addActionListener(e -> showCreateGroupDialog());
         groupBtnPanel.add(createGroupBtn);
         sidebar.add(groupBtnPanel, BorderLayout.SOUTH);
@@ -504,19 +509,26 @@ public class ChatPanel extends JPanel {
         actionsRow.setOpaque(false);
 
         phoneBtn = createHeaderButton("phone");
-        phoneBtn.setToolTipText("Gọi thoại");
+        phoneBtn.setToolTipText("Start audio call");
         phoneBtn.setEnabled(false);
         phoneBtn.addActionListener(e -> startCallWithPeer(WebRtcManager.MediaType.AUDIO));
         actionsRow.add(phoneBtn);
 
         videoBtn = createHeaderButton("video");
-        videoBtn.setToolTipText("Gọi video");
+        videoBtn.setToolTipText("Start video call");
         videoBtn.setEnabled(false);
         videoBtn.addActionListener(e -> startCallWithPeer(WebRtcManager.MediaType.VIDEO));
         actionsRow.add(videoBtn);
 
+        membersBtn = createHeaderButton("members");
+        membersBtn.setToolTipText("Manage group members");
+        membersBtn.setEnabled(false);
+        membersBtn.setVisible(false);
+        membersBtn.addActionListener(e -> showManageGroupDialog());
+        actionsRow.add(membersBtn);
+
         deleteBtn = createHeaderButton("delete");
-        deleteBtn.setToolTipText("Xóa nhóm");
+        deleteBtn.setToolTipText("Delete group");
         deleteBtn.setEnabled(false);
         deleteBtn.setVisible(false);
         deleteBtn.addActionListener(e -> deleteActiveGroup());
@@ -663,6 +675,11 @@ public class ChatPanel extends JPanel {
                     int[] px = {ix + size - 4, ix + size, ix + size, ix + size - 4};
                     int[] py = {iy + 6, iy + 3, iy + size - 3, iy + size - 6};
                     g2.drawPolygon(px, py, 4);
+                } else if ("members".equals(iconName)) {
+                    g2.drawOval(ix + 2, iy + 2, 5, 5);
+                    g2.drawOval(ix + 9, iy + 3, 5, 5);
+                    g2.drawArc(ix, iy + 8, 9, 7, 0, 180);
+                    g2.drawArc(ix + 7, iy + 9, 9, 6, 0, 180);
                 } else if ("more".equals(iconName)) {
                     g2.fillOval(ix + size/2 - 2, iy + 2, 4, 4);
                     g2.fillOval(ix + size/2 - 2, iy + size/2 - 2, 4, 4);
@@ -840,6 +857,10 @@ public class ChatPanel extends JPanel {
             videoBtn.setEnabled(false);
             videoBtn.setVisible(true);
         }
+        if (membersBtn != null) {
+            membersBtn.setEnabled(false);
+            membersBtn.setVisible(false);
+        }
         if (deleteBtn != null) {
             deleteBtn.setEnabled(false);
             deleteBtn.setVisible(false);
@@ -858,8 +879,8 @@ public class ChatPanel extends JPanel {
         String groupName = peerTitle.getText();
         int confirm = javax.swing.JOptionPane.showConfirmDialog(
             ChatPanel.this,
-            "Bạn có chắc chắn muốn xóa nhóm \"" + groupName + "\" không?\nLịch sử trò chuyện của nhóm cũng sẽ bị xóa.",
-            "Xác nhận xóa nhóm",
+            "Are you sure you want to delete group \"" + groupName + "\"?\nThe group's chat history will also be deleted.",
+            "Confirm group deletion",
             javax.swing.JOptionPane.YES_NO_OPTION,
             javax.swing.JOptionPane.WARNING_MESSAGE
         );
@@ -874,13 +895,14 @@ public class ChatPanel extends JPanel {
         selectedPeer = item.userId;
         item.unreadCount = 0;
         updatePeerHeader(item);
-        messageInput.setEnabled(true);
+        boolean canChat = canSendToConversation(item);
+        messageInput.setEnabled(canChat);
         if (attachBtn != null) {
-            attachBtn.setEnabled(true);
+            attachBtn.setEnabled(canChat);
             attachBtn.repaint();
         }
         if (sendBtn != null) {
-            sendBtn.setEnabled(true);
+            sendBtn.setEnabled(canChat);
             sendBtn.repaint();
         }
         
@@ -894,6 +916,10 @@ public class ChatPanel extends JPanel {
             videoBtn.setEnabled(!isGroup);
             videoBtn.setVisible(!isGroup);
         }
+        if (membersBtn != null) {
+            membersBtn.setEnabled(isGroup);
+            membersBtn.setVisible(isGroup);
+        }
         if (deleteBtn != null) {
             deleteBtn.setEnabled(isGroup);
             deleteBtn.setVisible(isGroup);
@@ -901,7 +927,9 @@ public class ChatPanel extends JPanel {
 
         loadChatHistory();
         userList.repaint();
-        messageInput.requestFocusInWindow();
+        if (canChat) {
+            messageInput.requestFocusInWindow();
+        }
     }
 
     private void updatePeerHeader(ConversationItem item) {
@@ -937,7 +965,6 @@ public class ChatPanel extends JPanel {
     private void loadChatHistory() {
         messageContainer.removeAll();
         this.messageCount = 0;
-        messageContainer.add(Box.createVerticalGlue());
         if (selectedPeer != null && localDb != null) {
             java.util.List<ChatMessage> msgs = localDb.loadMessages(username, selectedPeer);
             for (ChatMessage msg : msgs) {
@@ -987,6 +1014,13 @@ public class ChatPanel extends JPanel {
         if (selectedPeer == null) {
             return;
         }
+        ConversationItem selectedItem = findConversation(selectedPeer);
+        if (selectedPeer.startsWith("group-") && !canSendToConversation(selectedItem)) {
+            flow("Group chat is unavailable", "At least 2 group members must be online.",
+                    ActivityFlowPanel.Tone.INFO);
+            updatePeerHeader(selectedItem);
+            return;
+        }
 
         messageInput.setEnabled(false);
         if (attachBtn != null) attachBtn.setEnabled(false);
@@ -1008,8 +1042,8 @@ public class ChatPanel extends JPanel {
                     }
                     return true;
                 } catch (Exception ex) {
-                    log.error("Gửi tin nhắn thất bại", ex);
-                    flow("Gửi tin thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    log.error("Failed to send message", ex);
+                    flow("Send failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
                     return false;
                 }
             }
@@ -1029,11 +1063,14 @@ public class ChatPanel extends JPanel {
                     log.error("send done error", e);
                     messageInput.setText(textToSend);
                 }
-                boolean hasPeer = (selectedPeer != null);
-                messageInput.setEnabled(hasPeer);
-                if (attachBtn != null) attachBtn.setEnabled(hasPeer);
-                if (sendBtn != null) sendBtn.setEnabled(hasPeer);
-                messageInput.requestFocusInWindow();
+                ConversationItem currentItem = findConversation(selectedPeer);
+                boolean canContinue = selectedPeer != null && canSendToConversation(currentItem);
+                messageInput.setEnabled(canContinue);
+                if (attachBtn != null) attachBtn.setEnabled(canContinue);
+                if (sendBtn != null) sendBtn.setEnabled(canContinue);
+                if (canContinue) {
+                    messageInput.requestFocusInWindow();
+                }
             }
         }.execute();
     }
@@ -1099,6 +1136,10 @@ public class ChatPanel extends JPanel {
                 GroupMessageDto groupMsg = JsonSerializer.fromBytes(
                         frame.getPayload(), GroupMessageDto.class);
                 if (groupMsg != null) {
+                    if (isGroupControlMessage(groupMsg)) {
+                        SwingUtilities.invokeLater(() -> handleGroupControlMessage(groupMsg));
+                        return;
+                    }
                     int myIndex = groupMsg.getRecipientIds().indexOf(username);
                     if (myIndex >= 0 && myIndex < groupMsg.getEncryptedPayloads().size()) {
                         String payloadJson = groupMsg.getEncryptedPayloads().get(myIndex);
@@ -1113,19 +1154,15 @@ public class ChatPanel extends JPanel {
                                 .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
                         
                         SwingUtilities.invokeLater(() -> {
-                            List<String> allMembers = new ArrayList<>();
-                            allMembers.add(sender);
-                            if (groupMsg.getRecipientIds() != null) {
-                                allMembers.addAll(groupMsg.getRecipientIds());
-                            }
-                            groupManager.registerGroup(groupId, groupName, allMembers);
+                            List<String> allMembers = groupMembersFromMessage(groupMsg, sender);
+                            GroupManager.GroupInfo groupInfo = groupManager.registerGroup(
+                                    groupId, groupName, allMembers, groupMsg.getLeaderId());
                             ConversationItem item = findConversation(groupId);
                             if (item == null) {
-                                item = ConversationItem.manual(groupId);
-                                item.displayName = groupName;
-                                item.online = true;
-                                item.isGroup = true;
+                                item = groupConversationItem(groupInfo);
                                 addConversation(item);
+                            } else {
+                                syncGroupConversationItem(item, groupInfo);
                             }
                             
                             if (groupId.equals(selectedPeer)) {
@@ -1135,6 +1172,9 @@ public class ChatPanel extends JPanel {
                                 item.unreadCount++;
                             }
                             localDb.saveMessage(username, groupId, sender, text, msg.getSentAt());
+                            if (groupId.equals(selectedPeer)) {
+                                updatePeerHeader(item);
+                            }
                             userList.repaint();
                         });
                     }
@@ -1142,8 +1182,8 @@ public class ChatPanel extends JPanel {
             } else if (frame.getType() == PacketFrame.TYPE_FILE_INIT) {
                 FileMetadataDto meta = JsonSerializer.fromBytes(frame.getPayload(), FileMetadataDto.class);
                 fileTransferManager.handleFileInit(meta);
-                SwingUtilities.invokeLater(() -> flow("File đến",
-                        meta.getSenderId() + " gửi \"" + meta.getFileName() + "\" ("
+                SwingUtilities.invokeLater(() -> flow("Incoming file",
+                        meta.getSenderId() + " sent \"" + meta.getFileName() + "\" ("
                         + (meta.getFileSize() / 1024) + " KB)",
                         ActivityFlowPanel.Tone.INFO));
             } else if (frame.getType() == PacketFrame.TYPE_FILE_CHUNK) {
@@ -1174,8 +1214,8 @@ public class ChatPanel extends JPanel {
                 }
             }
         } catch (Exception ex) {
-            log.warn("Lỗi xử lý frame từ server", ex);
-            flow("Không xử lý được frame", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+            log.warn("Failed to process frame from server", ex);
+            flow("Unable to process server frame", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
         }
     }
 
@@ -1211,10 +1251,7 @@ public class ChatPanel extends JPanel {
             userListModel.clear();
             if (groupManager != null) {
                 for (GroupManager.GroupInfo g : groupManager.listGroups()) {
-                    ConversationItem item = ConversationItem.manual(g.groupId());
-                    item.displayName = g.groupName();
-                    item.online = true;
-                    item.isGroup = true;
+                    ConversationItem item = groupConversationItem(g);
                     userListModel.addElement(item);
                 }
             }
@@ -1225,14 +1262,16 @@ public class ChatPanel extends JPanel {
                 userListModel.addElement(ConversationItem.manual(selectedPeer));
             }
             if (userListModel.isEmpty()) {
-                userListModel.addElement(ConversationItem.placeholder("Chưa có hội thoại khả dụng"));
+                userListModel.addElement(ConversationItem.placeholder("No conversations available"));
             }
             selectListItem(selectedPeer);
         } finally {
             updatingUserList = false;
         }
         if (selectedPeer != null) {
-            updatePeerHeader(findConversation(selectedPeer));
+            ConversationItem selected = findConversation(selectedPeer);
+            updatePeerHeader(selected);
+            refreshComposerState(selected);
         }
     }
 
@@ -1265,7 +1304,7 @@ public class ChatPanel extends JPanel {
     private void openFileChooser() {
         if (selectedPeer == null) return;
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
-        chooser.setDialogTitle("Chọn file để gửi cho " + selectedPeer);
+        chooser.setDialogTitle("Choose a file to send to " + selectedPeer);
         chooser.setMultiSelectionEnabled(false);
         int result = chooser.showOpenDialog(this);
         if (result != javax.swing.JFileChooser.APPROVE_OPTION) return;
@@ -1275,7 +1314,7 @@ public class ChatPanel extends JPanel {
 
         // Hiển thị tin nhắn tạm thời
         String time = java.time.LocalTime.now().format(TIME_FMT);
-        addMessageBubble("📎 " + selectedFile.getName() + " (đang gửi...)", true, time);
+        addMessageBubble("File: " + selectedFile.getName() + " (sending...)", true, time);
 
         new SwingWorker<Boolean, Void>() {
             @Override
@@ -1288,19 +1327,19 @@ public class ChatPanel extends JPanel {
             protected void done() {
                 try {
                     get();
-                    flow("File đã gửi",
-                            "\"" + selectedFile.getName() + "\" → " + peer,
+                    flow("File sent",
+                            "\"" + selectedFile.getName() + "\" -> " + peer,
                             ActivityFlowPanel.Tone.SUCCESS);
                     
                     if (localDb != null) {
-                        localDb.saveMessage(username, peer, username, "📎 " + selectedFile.getName() + " (đã gửi)", Instant.now().getEpochSecond());
+                        localDb.saveMessage(username, peer, username, "File: " + selectedFile.getName() + " (sent)", Instant.now().getEpochSecond());
                     }
                     if (peer.equals(selectedPeer)) {
                         loadChatHistory();
                     }
                 } catch (Exception ex) {
                     log.error("File send failed", ex);
-                    flow("Gửi file thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    flow("File send failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
                 }
             }
         }.execute();
@@ -1312,25 +1351,25 @@ public class ChatPanel extends JPanel {
     private void showFileReceivedNotification(java.io.File file, String fileName, String senderId, String groupId) {
         String peer = (groupId != null && !groupId.isEmpty()) ? groupId : senderId;
 
-        flow("File nhận xong ✓", "\"" + fileName + "\" đã lưu tại " + file.getParent(),
+        flow("File received", "\"" + fileName + "\" saved to " + file.getParent(),
                 ActivityFlowPanel.Tone.SUCCESS);
 
-        // Thêm bubble tin nhắn hệ thống
+        // Add a system message bubble.
         String time = java.time.LocalTime.now().format(TIME_FMT);
         
         // Save to SQLite DB for persistence
         if (localDb != null) {
-            localDb.saveMessage(username, peer, senderId, "📥 " + fileName + " (đã nhận — SHA-256 ✓)", Instant.now().getEpochSecond());
+            localDb.saveMessage(username, peer, senderId, "File: " + fileName + " (received - SHA-256 OK)", Instant.now().getEpochSecond());
         }
 
         if (peer.equals(selectedPeer)) {
-            addMessageBubble("📥 " + fileName + " (đã nhận — SHA-256 ✓)", false, time, senderId);
+            addMessageBubble("File: " + fileName + " (received - SHA-256 OK)", false, time, senderId);
         } else {
             ConversationItem item = findConversation(peer);
             if (item == null) {
                 if (groupId != null && !groupId.isEmpty() && groupManager != null) {
                     GroupManager.GroupInfo group = groupManager.getGroup(groupId);
-                    String groupName = group != null ? group.groupName() : "Nhóm mới";
+                    String groupName = group != null ? group.groupName() : "New group";
                     item = ConversationItem.manual(groupId);
                     item.displayName = groupName;
                     item.online = true;
@@ -1347,8 +1386,8 @@ public class ChatPanel extends JPanel {
 
         // Hỏi mở file không
         int opt = javax.swing.JOptionPane.showConfirmDialog(this,
-                "Đã nhận xong file \"" + fileName + "\".\nBạn có muốn mở thư mục lưu không?",
-                "File đã tải xong", javax.swing.JOptionPane.YES_NO_OPTION,
+                "Finished receiving \"" + fileName + "\".\nDo you want to open the destination folder?",
+                "File downloaded", javax.swing.JOptionPane.YES_NO_OPTION,
                 javax.swing.JOptionPane.INFORMATION_MESSAGE);
         if (opt == javax.swing.JOptionPane.YES_OPTION) {
             try {
@@ -1364,13 +1403,364 @@ public class ChatPanel extends JPanel {
     // =========================================================================
 
     /**
-     * Hiển thị dialog tạo nhóm — Glassmorphism UI.
+     * Shows the group creation dialog with a glassmorphism UI.
      */
     private void showCreateGroupDialog() {
         javax.swing.JFrame topFrame = (javax.swing.JFrame)
                 javax.swing.SwingUtilities.getWindowAncestor(this);
 
-        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Tạo nhóm chat mới", true);
+        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Create new group chat", true);
+        dialog.setMinimumSize(new Dimension(520, 560));
+        dialog.getContentPane().setBackground(UIConstants.DEEP_CARBON);
+
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(UIConstants.DEEP_CARBON);
+        content.setBorder(new EmptyBorder(24, 28, 22, 28));
+
+        JLabel title = UiStyles.headingLabel("Create group chat");
+        title.setForeground(UIConstants.TEXT_WHITE);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(title);
+        content.add(Box.createVerticalStrut(16));
+
+        JLabel nameLabel = UiStyles.mutedLabel("Group name");
+        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(nameLabel);
+        content.add(Box.createVerticalStrut(6));
+
+        JTextField groupNameField = UiStyles.styledTextField(24);
+        UiStyles.setPlaceholder(groupNameField, "Example: Study Group, Dev Team...");
+        groupNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        groupNameField.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(groupNameField);
+        content.add(Box.createVerticalStrut(16));
+
+        JLabel membersLabel = UiStyles.mutedLabel("Select members (at least 2 other people)");
+        membersLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(membersLabel);
+        content.add(Box.createVerticalStrut(6));
+
+        JPanel membersPanel = new JPanel();
+        membersPanel.setLayout(new BoxLayout(membersPanel, BoxLayout.Y_AXIS));
+        membersPanel.setBackground(UIConstants.INPUT_BG);
+        membersPanel.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+        List<javax.swing.JCheckBox> checkBoxes = new ArrayList<>();
+        for (ConversationItem user : accountListSnapshot()) {
+            javax.swing.JCheckBox cb = new javax.swing.JCheckBox(user.displayName() + "  " + userPresenceLabel(user));
+            cb.setActionCommand(user.userId);
+            cb.setFont(UIConstants.FONT_BODY);
+            cb.setForeground(UIConstants.TEXT_SILVER);
+            cb.setOpaque(false);
+            cb.setFocusPainted(false);
+            cb.setAlignmentX(Component.LEFT_ALIGNMENT);
+            cb.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+            if (user.userId.equals(selectedPeer)) {
+                cb.setSelected(true);
+            }
+            membersPanel.add(cb);
+            membersPanel.add(Box.createVerticalStrut(6));
+            checkBoxes.add(cb);
+        }
+
+        if (checkBoxes.isEmpty()) {
+            JLabel noUsersLabel = UiStyles.mutedLabel("No other accounts are available");
+            noUsersLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            membersPanel.add(noUsersLabel);
+        }
+
+        JScrollPane scrollPane = UiStyles.styledScrollPane(membersPanel);
+        scrollPane.setBorder(BorderFactory.createLineBorder(UIConstants.GLASS_BORDER, 1));
+        scrollPane.setPreferredSize(new Dimension(440, 240));
+        scrollPane.setMinimumSize(new Dimension(440, 180));
+        scrollPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, 240));
+        scrollPane.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(scrollPane);
+        content.add(Box.createVerticalStrut(18));
+
+        JLabel ruleLabel = UiStyles.mutedLabel("The creator becomes group leader. A group needs at least 3 members.");
+        ruleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(ruleLabel);
+        content.add(Box.createVerticalStrut(18));
+
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JButton cancelBtn = UiStyles.ghostButton("Cancel");
+        cancelBtn.addActionListener(e -> dialog.dispose());
+        btnRow.add(cancelBtn);
+
+        JButton createBtn = UiStyles.primaryButton("Create Group");
+        createBtn.addActionListener(e -> {
+            String groupName = groupNameField.getText().trim();
+            if (groupName.isEmpty()) {
+                groupNameField.requestFocus();
+                return;
+            }
+            List<String> memberIds = new ArrayList<>();
+            for (javax.swing.JCheckBox cb : checkBoxes) {
+                if (cb.isSelected()) {
+                    memberIds.add(cb.getActionCommand());
+                }
+            }
+            int requiredOthers = GroupManager.MIN_GROUP_MEMBERS - 1;
+            if (memberIds.size() < requiredOthers) {
+                javax.swing.JOptionPane.showMessageDialog(dialog,
+                        "Please select at least " + requiredOthers
+                                + " other members to create a group.",
+                        "Not enough members", javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            GroupManager.GroupInfo group;
+            try {
+                group = groupManager.createGroup(groupName, memberIds);
+            } catch (Exception ex) {
+                javax.swing.JOptionPane.showMessageDialog(dialog,
+                        ex.getMessage(), "Unable to create group", javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            flow("Group created", "\"" + groupName + "\" with " + group.memberIds().size() + " members",
+                    ActivityFlowPanel.Tone.SUCCESS);
+            dialog.dispose();
+
+            ConversationItem groupItem = groupConversationItem(group);
+            SwingUtilities.invokeLater(() -> {
+                addConversation(groupItem);
+                selectPeer(groupItem);
+            });
+
+            new SwingWorker<Void, Void>() {
+                @Override
+                protected Void doInBackground() throws Exception {
+                    groupManager.broadcastGroupCreated(group.groupId());
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        get();
+                    } catch (Exception ex) {
+                        flow("Group sync failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    }
+                }
+            }.execute();
+        });
+        btnRow.add(createBtn);
+        content.add(btnRow);
+
+        dialog.setContentPane(content);
+        dialog.pack();
+        dialog.setLocationRelativeTo(topFrame);
+        dialog.setVisible(true);
+    }
+
+    private void showManageGroupDialog() {
+        if (selectedPeer == null || groupManager == null || !selectedPeer.startsWith("group-")) {
+            return;
+        }
+        GroupManager.GroupInfo group = groupManager.getGroup(selectedPeer);
+        if (group == null) {
+            return;
+        }
+
+        javax.swing.JFrame topFrame = (javax.swing.JFrame)
+                javax.swing.SwingUtilities.getWindowAncestor(this);
+        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Manage members", true);
+        dialog.setMinimumSize(new Dimension(540, 600));
+        dialog.getContentPane().setBackground(UIConstants.DEEP_CARBON);
+
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(UIConstants.DEEP_CARBON);
+        content.setBorder(new EmptyBorder(24, 28, 22, 28));
+
+        JLabel title = UiStyles.headingLabel(group.groupName());
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(title);
+        content.add(Box.createVerticalStrut(6));
+
+        JLabel leader = UiStyles.mutedLabel("Group leader: @" + group.leaderId());
+        leader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(leader);
+        content.add(Box.createVerticalStrut(18));
+
+        JLabel membersTitle = UiStyles.mutedLabel("Current members");
+        membersTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(membersTitle);
+        content.add(Box.createVerticalStrut(6));
+
+        JPanel membersPanel = new JPanel();
+        membersPanel.setLayout(new BoxLayout(membersPanel, BoxLayout.Y_AXIS));
+        membersPanel.setBackground(UIConstants.INPUT_BG);
+        membersPanel.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+        boolean localLeader = group.isLeader(username);
+        for (String memberId : group.memberIds()) {
+            JPanel row = new JPanel(new BorderLayout(10, 0));
+            row.setOpaque(false);
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+
+            String role = memberId.equals(group.leaderId()) ? "  (group leader)" : "";
+            JLabel memberLabel = UiStyles.bodyLabel("@" + memberId + role + "  " + userPresenceLabel(memberId));
+            row.add(memberLabel, BorderLayout.CENTER);
+
+            if (localLeader && !memberId.equals(username) && !memberId.equals(group.leaderId())) {
+                JButton removeBtn = UiStyles.dangerButton("Remove");
+                removeBtn.setPreferredSize(new Dimension(76, 32));
+                removeBtn.setEnabled(group.memberIds().size() > GroupManager.MIN_GROUP_MEMBERS);
+                removeBtn.setToolTipText(removeBtn.isEnabled()
+                        ? "Remove this member from the group"
+                        : "The group must keep at least 3 members");
+                removeBtn.addActionListener(e -> {
+                    try {
+                        groupManager.removeMember(group.groupId(), memberId, username);
+                        applyUserList(lastUserList);
+                        dialog.dispose();
+                        showManageGroupDialog();
+                        new SwingWorker<Void, Void>() {
+                            @Override
+                            protected Void doInBackground() throws Exception {
+                                groupManager.broadcastMemberRemoved(group.groupId(), memberId);
+                                return null;
+                            }
+
+                            @Override
+                            protected void done() {
+                                try {
+                                    get();
+                                } catch (Exception ex) {
+                                    flow("Group update sync failed", ex.getMessage(),
+                                            ActivityFlowPanel.Tone.ERROR);
+                                }
+                            }
+                        }.execute();
+                    } catch (Exception ex) {
+                        javax.swing.JOptionPane.showMessageDialog(dialog,
+                                ex.getMessage(), "Unable to remove member",
+                                javax.swing.JOptionPane.WARNING_MESSAGE);
+                    }
+                });
+                row.add(removeBtn, BorderLayout.EAST);
+            }
+            membersPanel.add(row);
+            membersPanel.add(Box.createVerticalStrut(6));
+        }
+
+        JScrollPane membersScroll = UiStyles.styledScrollPane(membersPanel);
+        membersScroll.setBorder(BorderFactory.createLineBorder(UIConstants.GLASS_BORDER, 1));
+        membersScroll.setPreferredSize(new Dimension(460, 190));
+        membersScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 190));
+        membersScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(membersScroll);
+        content.add(Box.createVerticalStrut(18));
+
+        JLabel addTitle = UiStyles.mutedLabel("Add members");
+        addTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(addTitle);
+        content.add(Box.createVerticalStrut(6));
+
+        JPanel addPanel = new JPanel();
+        addPanel.setLayout(new BoxLayout(addPanel, BoxLayout.Y_AXIS));
+        addPanel.setBackground(UIConstants.INPUT_BG);
+        addPanel.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+        List<javax.swing.JCheckBox> addBoxes = new ArrayList<>();
+        for (ConversationItem user : accountListSnapshot()) {
+            if (group.memberIds().contains(user.userId)) {
+                continue;
+            }
+            javax.swing.JCheckBox cb = new javax.swing.JCheckBox(user.displayName() + "  " + userPresenceLabel(user));
+            cb.setActionCommand(user.userId);
+            cb.setFont(UIConstants.FONT_BODY);
+            cb.setForeground(UIConstants.TEXT_SILVER);
+            cb.setOpaque(false);
+            cb.setFocusPainted(false);
+            cb.setAlignmentX(Component.LEFT_ALIGNMENT);
+            addPanel.add(cb);
+            addPanel.add(Box.createVerticalStrut(6));
+            addBoxes.add(cb);
+        }
+        if (addBoxes.isEmpty()) {
+            JLabel empty = UiStyles.mutedLabel("No more accounts to add");
+            empty.setAlignmentX(Component.LEFT_ALIGNMENT);
+            addPanel.add(empty);
+        }
+
+        JScrollPane addScroll = UiStyles.styledScrollPane(addPanel);
+        addScroll.setBorder(BorderFactory.createLineBorder(UIConstants.GLASS_BORDER, 1));
+        addScroll.setPreferredSize(new Dimension(460, 150));
+        addScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
+        addScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(addScroll);
+        content.add(Box.createVerticalStrut(18));
+
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JButton closeBtn = UiStyles.ghostButton("Close");
+        closeBtn.addActionListener(e -> dialog.dispose());
+        btnRow.add(closeBtn);
+
+        JButton addBtn = UiStyles.primaryButton("Add");
+        addBtn.setEnabled(!addBoxes.isEmpty());
+        addBtn.addActionListener(e -> {
+            List<String> selected = new ArrayList<>();
+            for (javax.swing.JCheckBox cb : addBoxes) {
+                if (cb.isSelected()) {
+                    selected.add(cb.getActionCommand());
+                }
+            }
+            if (selected.isEmpty()) {
+                return;
+            }
+            try {
+                GroupManager.GroupInfo updated = groupManager.addMembers(group.groupId(), selected);
+                applyUserList(lastUserList);
+                dialog.dispose();
+                showManageGroupDialog();
+                new SwingWorker<Void, Void>() {
+                    @Override
+                    protected Void doInBackground() throws Exception {
+                        groupManager.broadcastMembersUpdated(updated.groupId());
+                        return null;
+                    }
+
+                    @Override
+                    protected void done() {
+                        try {
+                            get();
+                        } catch (Exception ex) {
+                            flow("New member sync failed", ex.getMessage(),
+                                    ActivityFlowPanel.Tone.ERROR);
+                        }
+                    }
+                }.execute();
+            } catch (Exception ex) {
+                javax.swing.JOptionPane.showMessageDialog(dialog,
+                        ex.getMessage(), "Unable to add members",
+                        javax.swing.JOptionPane.WARNING_MESSAGE);
+            }
+        });
+        btnRow.add(addBtn);
+        content.add(btnRow);
+
+        dialog.setContentPane(content);
+        dialog.pack();
+        dialog.setLocationRelativeTo(topFrame);
+        dialog.setVisible(true);
+    }
+
+    private void showCreateGroupDialogLegacy() {
+        javax.swing.JFrame topFrame = (javax.swing.JFrame)
+                javax.swing.SwingUtilities.getWindowAncestor(this);
+
+        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Create new group chat", true);
         dialog.setMinimumSize(new Dimension(460, 420));
         dialog.setUndecorated(false);
         dialog.getContentPane().setBackground(UIConstants.DEEP_CARBON);
@@ -1380,25 +1770,25 @@ public class ChatPanel extends JPanel {
         content.setBackground(UIConstants.DEEP_CARBON);
         content.setBorder(new EmptyBorder(24, 28, 24, 28));
 
-        JLabel title = UiStyles.headingLabel("Tạo nhóm chat");
+        JLabel title = UiStyles.headingLabel("Create group chat");
         title.setForeground(UIConstants.TEXT_WHITE);
         title.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         content.add(title);
         content.add(Box.createVerticalStrut(20));
 
-        JLabel nameLabel = UiStyles.mutedLabel("Tên nhóm");
+        JLabel nameLabel = UiStyles.mutedLabel("Group name");
         nameLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         content.add(nameLabel);
         content.add(Box.createVerticalStrut(6));
 
         JTextField groupNameField = UiStyles.styledTextField(20);
-        UiStyles.setPlaceholder(groupNameField, "VD: Nhóm học tập, Dev Team...");
+        UiStyles.setPlaceholder(groupNameField, "Example: Study Group, Dev Team...");
         groupNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
         groupNameField.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         content.add(groupNameField);
         content.add(Box.createVerticalStrut(18));
 
-        JLabel membersLabel = UiStyles.mutedLabel("Chọn thành viên vào nhóm");
+        JLabel membersLabel = UiStyles.mutedLabel("Select group members");
         membersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         content.add(membersLabel);
         content.add(Box.createVerticalStrut(6));
@@ -1429,7 +1819,7 @@ public class ChatPanel extends JPanel {
         }
 
         if (checkBoxes.isEmpty()) {
-            JLabel noUsersLabel = new JLabel("Không có thành viên trực tuyến nào khác");
+            JLabel noUsersLabel = new JLabel("No other online members available");
             noUsersLabel.setFont(UIConstants.FONT_BODY);
             noUsersLabel.setForeground(UIConstants.TEXT_MUTED);
             noUsersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
@@ -1451,11 +1841,11 @@ public class ChatPanel extends JPanel {
         btnRow.setOpaque(false);
         btnRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
 
-        JButton cancelBtn = UiStyles.ghostButton("Hủy");
+        JButton cancelBtn = UiStyles.ghostButton("Cancel");
         cancelBtn.addActionListener(e -> dialog.dispose());
         btnRow.add(cancelBtn);
 
-        JButton createBtn = UiStyles.primaryButton("Tạo nhóm");
+        JButton createBtn = UiStyles.primaryButton("Create Group");
         createBtn.addActionListener(e -> {
             String groupName = groupNameField.getText().trim();
             if (groupName.isEmpty()) {
@@ -1470,16 +1860,16 @@ public class ChatPanel extends JPanel {
             }
             if (memberIds.isEmpty()) {
                 javax.swing.JOptionPane.showMessageDialog(dialog,
-                        "Vui lòng chọn ít nhất 1 thành viên.", "Lỗi",
+                        "Please select at least 1 member.", "Error",
                         javax.swing.JOptionPane.WARNING_MESSAGE);
                 return;
             }
             GroupManager.GroupInfo group = groupManager.createGroup(groupName, memberIds);
-            flow("Nhóm đã tạo", "\"" + groupName + "\" với " + memberIds.size() + " thành viên",
+            flow("Group created", "\"" + groupName + "\" with " + memberIds.size() + " members",
                     ActivityFlowPanel.Tone.SUCCESS);
             dialog.dispose();
 
-            // Mở conversation với nhóm vừa tạo
+            // Open the newly created group conversation.
             ConversationItem groupItem = ConversationItem.manual(group.groupId());
             groupItem.displayName = group.groupName();
             groupItem.online = true;
@@ -1586,19 +1976,19 @@ public class ChatPanel extends JPanel {
     private void startCallWithPeer(WebRtcManager.MediaType mediaType) {
         if (selectedPeer == null) {
             javax.swing.JOptionPane.showMessageDialog(this,
-                    "Vui lòng chọn một người dùng để gọi.", "Chưa chọn người dùng",
+                    "Please select a user to call.", "No user selected",
                     javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
         if (webRtcManager.isInCall()) {
             javax.swing.JOptionPane.showMessageDialog(this,
-                    "Đang trong một cuộc gọi khác.", "Bận",
+                    "Another call is already in progress.", "Busy",
                     javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
 
         String peer = selectedPeer;
-        String typeLabel = mediaType == WebRtcManager.MediaType.VIDEO ? "Video" : "Thoại";
+        String typeLabel = mediaType == WebRtcManager.MediaType.VIDEO ? "Video" : "Audio";
 
         showActiveCallDialog(peer, mediaType, true);
 
@@ -1613,11 +2003,11 @@ public class ChatPanel extends JPanel {
             protected void done() {
                 try {
                     get();
-                    flow("Gọi " + typeLabel, "Đang chờ " + peer + " bắt máy...",
+                    flow(typeLabel + " call", "Waiting for " + peer + " to answer...",
                             ActivityFlowPanel.Tone.INFO);
                 } catch (Exception ex) {
                     log.error("startCall failed", ex);
-                    flow("Gọi thất bại", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    flow("Call failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
                     if (activeCallDialog != null) activeCallDialog.dispose();
                 }
             }
@@ -1635,7 +2025,7 @@ public class ChatPanel extends JPanel {
 
         String callTypeIcon = mediaType == WebRtcManager.MediaType.VIDEO ? "📹" : "📞";
         activeCallDialog = new javax.swing.JDialog(topFrame,
-                "Cuộc gọi — " + peer, false);
+                "Call - " + peer, false);
 
         if (mediaType == WebRtcManager.MediaType.AUDIO) {
             activeCallDialog.setSize(360, 340);
@@ -1673,13 +2063,13 @@ public class ChatPanel extends JPanel {
             panel.add(peerLabel);
             panel.add(Box.createVerticalStrut(6));
 
-            JLabel statusLabel = UiStyles.mutedLabel(isCaller ? "Đang gọi..." : "Cuộc gọi thoại");
+            JLabel statusLabel = UiStyles.mutedLabel(isCaller ? "Calling..." : "Audio call");
             statusLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
             statusLabel.setForeground(UIConstants.SECURE_TEAL);
             panel.add(statusLabel);
             panel.add(Box.createVerticalStrut(4));
 
-            JLabel e2eeLabel = UiStyles.mutedLabel("🔒 Cuộc gọi được bảo mật");
+            JLabel e2eeLabel = UiStyles.mutedLabel("Secure call");
             e2eeLabel.setFont(UIConstants.FONT_SMALL.deriveFont(10f));
             e2eeLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
             e2eeLabel.setForeground(new Color(0, 161, 156, 180));
@@ -1689,7 +2079,7 @@ public class ChatPanel extends JPanel {
             JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 20, 0));
             btnRow.setOpaque(false);
 
-            JButton endBtn = new JButton("      Kết thúc") {
+            JButton endBtn = new JButton("      End") {
                 @Override
                 protected void paintComponent(Graphics g) {
                     Graphics2D g2 = (Graphics2D) g.create();
@@ -1749,7 +2139,7 @@ public class ChatPanel extends JPanel {
             peerLabel.setForeground(UIConstants.TEXT_WHITE);
             peerLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
 
-            activeCallStateLbl = new JLabel(isCaller ? "Đang kết nối..." : "Đang kết nối video...");
+            activeCallStateLbl = new JLabel(isCaller ? "Connecting..." : "Connecting video...");
             activeCallStateLbl.setFont(UIConstants.FONT_BODY.deriveFont(13f));
             activeCallStateLbl.setForeground(UIConstants.SECURE_TEAL);
             activeCallStateLbl.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
@@ -1782,7 +2172,7 @@ public class ChatPanel extends JPanel {
             AvatarBadge pipAvatar = new AvatarBadge(username, Color.decode("#10B981"), UIConstants.SECURE_TEAL);
             pipAvatar.setPreferredSize(new Dimension(64, 64));
             
-            JLabel pipTitle = new JLabel("Bạn (Webcam)");
+            JLabel pipTitle = new JLabel("You (Webcam)");
             pipTitle.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD, 10f));
             pipTitle.setForeground(UIConstants.TEXT_MUTED);
             pipTitle.setHorizontalAlignment(JLabel.CENTER);
@@ -1822,11 +2212,11 @@ public class ChatPanel extends JPanel {
                     setBorderPainted(false);
                     setContentAreaFilled(false);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                    setToolTipText("Tắt Mic");
+                    setToolTipText("Mute mic");
                     addActionListener(e -> {
                         active = !active;
                         webRtcManager.setMicMuted(!active);
-                        setToolTipText(active ? "Tắt Mic" : "Bật Mic");
+                        setToolTipText(active ? "Mute mic" : "Unmute mic");
                         repaint();
                     });
                 }
@@ -1878,10 +2268,10 @@ public class ChatPanel extends JPanel {
                     setBorderPainted(false);
                     setContentAreaFilled(false);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                    setToolTipText("Tắt Camera");
+                    setToolTipText("Turn camera off");
                     addActionListener(e -> {
                         active = !active;
-                        setToolTipText(active ? "Bật Camera" : "Tắt Camera");
+                        setToolTipText(active ? "Turn camera on" : "Turn camera off");
                         meshPanel.repaint();
                         pipPanel.setVisible(active);
                         repaint();
@@ -1936,7 +2326,7 @@ public class ChatPanel extends JPanel {
                     setBorderPainted(false);
                     setContentAreaFilled(false);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                    setToolTipText("Kết thúc cuộc gọi");
+                    setToolTipText("End call");
                     addActionListener(e -> endCallAction());
                 }
                 @Override
@@ -1983,7 +2373,7 @@ public class ChatPanel extends JPanel {
             e2eeBanner.setOpaque(false);
             e2eeBanner.setBounds(20, 20, 240, 32);
             e2eeBanner.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 6));
-            JLabel bannerLabel = new JLabel("🔒 CUỘC GỌI VIDEO");
+            JLabel bannerLabel = new JLabel("SECURE VIDEO CALL");
             bannerLabel.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 10f));
             bannerLabel.setForeground(UIConstants.SECURE_TEAL);
             e2eeBanner.add(bannerLabel);
@@ -2019,7 +2409,7 @@ public class ChatPanel extends JPanel {
                 javax.swing.SwingUtilities.getWindowAncestor(this);
 
         activeCallDialog = new javax.swing.JDialog(topFrame,
-                "Cuộc gọi đến từ " + caller, false);
+                "Incoming call from " + caller, false);
         activeCallDialog.setSize(380, 330);
         activeCallDialog.setResizable(false);
         activeCallDialog.setLocationRelativeTo(this);
@@ -2053,8 +2443,8 @@ public class ChatPanel extends JPanel {
         panel.add(callerLabel);
         panel.add(Box.createVerticalStrut(4));
 
-        JLabel typeLabel = UiStyles.mutedLabel(icon + " Cuộc gọi " +
-                (mediaType == WebRtcManager.MediaType.VIDEO ? "video" : "thoại") + " đến");
+        JLabel typeLabel = UiStyles.mutedLabel(icon + " Incoming " +
+                (mediaType == WebRtcManager.MediaType.VIDEO ? "video" : "audio") + " call");
         typeLabel.setAlignmentX(java.awt.Component.CENTER_ALIGNMENT);
         typeLabel.setForeground(UIConstants.SECURE_TEAL);
         panel.add(typeLabel);
@@ -2063,7 +2453,7 @@ public class ChatPanel extends JPanel {
         JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 16, 0));
         btnRow.setOpaque(false);
 
-        JButton rejectBtn = new JButton("      Từ chối") {
+        JButton rejectBtn = new JButton("      Decline") {
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
@@ -2100,7 +2490,7 @@ public class ChatPanel extends JPanel {
         rejectBtn.addActionListener(e -> rejectCallAction());
         btnRow.add(rejectBtn);
 
-        JButton acceptBtn = new JButton("      Bắt máy") {
+        JButton acceptBtn = new JButton("      Answer") {
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
@@ -2167,7 +2557,7 @@ public class ChatPanel extends JPanel {
                 BorderFactory.createMatteBorder(0, 0, 1, 0, UIConstants.GLASS_BORDER),
                 new EmptyBorder(10, 20, 10, 20)));
 
-        String callTypeStr = mediaType == WebRtcManager.MediaType.VIDEO ? "gọi video" : "gọi thoại";
+        String callTypeStr = mediaType == WebRtcManager.MediaType.VIDEO ? "video call" : "audio call";
         String statusText = "";
         boolean showAccept = false;
         boolean showReject = false;
@@ -2184,20 +2574,20 @@ public class ChatPanel extends JPanel {
         switch (state) {
             case RINGING -> {
                 if (isCaller) {
-                    statusText = "Đang gọi " + callTypeStr + " tới @" + peer + "... Đang đổ chuông";
+                    statusText = "Calling @" + peer + " via " + callTypeStr + "... Ringing";
                     showHangup = true;
                 } else {
-                    statusText = "Cuộc " + callTypeStr + " đến từ @" + peer + "...";
+                    statusText = "Incoming " + callTypeStr + " from @" + peer + "...";
                     showAccept = true;
                     showReject = true;
                 }
             }
             case CONNECTING -> {
-                statusText = "Đang kết nối cuộc " + callTypeStr + " với @" + peer + "...";
+                statusText = "Connecting " + callTypeStr + " with @" + peer + "...";
                 showHangup = true;
             }
             case ACTIVE -> {
-                statusText = "Cuộc " + callTypeStr + " đang hoạt động với @" + peer;
+                statusText = "Active " + callTypeStr + " with @" + peer;
                 showHangup = true;
             }
         }
@@ -2238,7 +2628,7 @@ public class ChatPanel extends JPanel {
         right.setOpaque(false);
 
         if (showAccept) {
-            JButton accept = new JButton("      Trả lời") {
+            JButton accept = new JButton("      Answer") {
                 @Override
                 protected void paintComponent(Graphics g) {
                     Graphics2D g2 = (Graphics2D) g.create();
@@ -2281,7 +2671,7 @@ public class ChatPanel extends JPanel {
             right.add(accept);
         }
         if (showReject) {
-            JButton reject = new JButton("      Từ chối") {
+            JButton reject = new JButton("      Decline") {
                 @Override
                 protected void paintComponent(Graphics g) {
                     Graphics2D g2 = (Graphics2D) g.create();
@@ -2320,7 +2710,7 @@ public class ChatPanel extends JPanel {
             right.add(reject);
         }
         if (showHangup) {
-            JButton hangup = new JButton("      Cúp máy") {
+            JButton hangup = new JButton("      Hang up") {
                 @Override
                 protected void paintComponent(Graphics g) {
                     Graphics2D g2 = (Graphics2D) g.create();
@@ -2429,10 +2819,10 @@ public class ChatPanel extends JPanel {
 
         if (activeCallDialog != null && activeCallDialog.isVisible() && mediaType == WebRtcManager.MediaType.VIDEO) {
             String stateStr = switch (state) {
-                case RINGING -> "Đang đổ chuông...";
-                case CONNECTING -> "Đang kết nối...";
-                case ACTIVE -> "Cuộc gọi đang hoạt động 🔒";
-                case ENDED -> "Cuộc gọi đã kết thúc";
+                case RINGING -> "Ringing...";
+                case CONNECTING -> "Connecting...";
+                case ACTIVE -> "Call is active";
+                case ENDED -> "Call ended";
                 default -> state.name();
             };
             if (activeCallStateLbl != null) {
@@ -2441,13 +2831,13 @@ public class ChatPanel extends JPanel {
         }
 
         String msg = switch (state) {
-            case RINGING -> "Đang đổ chuông...";
-            case CONNECTING -> "Đang kết nối...";
-            case ACTIVE -> "Cuộc gọi đang hoạt động 🔒";
-            case ENDED -> "Cuộc gọi đã kết thúc";
+            case RINGING -> "Ringing...";
+            case CONNECTING -> "Connecting...";
+            case ACTIVE -> "Call is active";
+            case ENDED -> "Call ended";
             default -> state.name();
         };
-        flow("Cuộc gọi", msg,
+        flow("Call", msg,
                 state == WebRtcManager.CallState.ACTIVE ? ActivityFlowPanel.Tone.SUCCESS
                 : state == WebRtcManager.CallState.ENDED ? ActivityFlowPanel.Tone.INFO
                 : ActivityFlowPanel.Tone.INFO);
@@ -2464,7 +2854,7 @@ public class ChatPanel extends JPanel {
 
     /** Callback khi peer kết thúc cuộc gọi. */
     private void onCallEndedByPeer(String peerId) {
-        flow("Cuộc gọi kết thúc", peerId + " đã cúp máy.", ActivityFlowPanel.Tone.INFO);
+        flow("Call ended", peerId + " hung up.", ActivityFlowPanel.Tone.INFO);
         updateCallControlBar(WebRtcManager.CallState.ENDED, peerId, WebRtcManager.MediaType.AUDIO);
         if (activeCallDialog != null) {
             activeCallDialog.dispose();
@@ -2527,6 +2917,147 @@ public class ChatPanel extends JPanel {
         return item == null ? 0 : item.unreadCount;
     }
 
+    private List<ConversationItem> accountListSnapshot() {
+        List<ConversationItem> accounts = new ArrayList<>();
+        if (lastUserList == null) {
+            return accounts;
+        }
+        for (ConversationItem user : lastUserList) {
+            if (user != null && !user.placeholder && !user.isGroup && !user.userId.equals(username)) {
+                accounts.add(user);
+            }
+        }
+        return accounts;
+    }
+
+    private String userPresenceLabel(ConversationItem user) {
+        return user != null && user.online ? "(online)" : "(offline)";
+    }
+
+    private String userPresenceLabel(String userId) {
+        if (username.equals(userId)) {
+            return "(online)";
+        }
+        ConversationItem item = findIn(lastUserList, userId);
+        return userPresenceLabel(item);
+    }
+
+    private ConversationItem groupConversationItem(GroupManager.GroupInfo group) {
+        ConversationItem item = ConversationItem.manual(group.groupId());
+        syncGroupConversationItem(item, group);
+        item.unreadCount = unreadCountFor(group.groupId());
+        return item;
+    }
+
+    private void syncGroupConversationItem(ConversationItem item, GroupManager.GroupInfo group) {
+        int onlineCount = onlineMemberCount(group);
+        item.displayName = group.groupName();
+        item.online = onlineCount >= 2;
+        item.isGroup = true;
+        item.groupOnlineCount = onlineCount;
+        item.groupMemberCount = group.memberIds().size();
+        item.leaderId = group.leaderId();
+    }
+
+    private int onlineMemberCount(GroupManager.GroupInfo group) {
+        Set<String> onlineIds = onlineUserIds();
+        int count = 0;
+        for (String memberId : group.memberIds()) {
+            if (username.equals(memberId) || onlineIds.contains(memberId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private Set<String> onlineUserIds() {
+        Set<String> ids = new HashSet<>();
+        if (lastUserList == null) {
+            return ids;
+        }
+        for (ConversationItem user : lastUserList) {
+            if (user != null && !user.placeholder && user.online) {
+                ids.add(user.userId);
+            }
+        }
+        return ids;
+    }
+
+    private boolean canSendToConversation(ConversationItem item) {
+        if (item == null) {
+            return selectedPeer != null && !selectedPeer.startsWith("group-");
+        }
+        return !item.isGroup || item.online;
+    }
+
+    private void refreshComposerState(ConversationItem item) {
+        if (selectedPeer == null || messageInput == null) {
+            return;
+        }
+        boolean enabled = canSendToConversation(item);
+        messageInput.setEnabled(enabled);
+        if (attachBtn != null) {
+            attachBtn.setEnabled(enabled);
+        }
+        if (sendBtn != null) {
+            sendBtn.setEnabled(enabled);
+            sendBtn.repaint();
+        }
+    }
+
+    private boolean isGroupControlMessage(GroupMessageDto groupMsg) {
+        return groupMsg.getControlType() != null && !groupMsg.getControlType().isBlank();
+    }
+
+    private void handleGroupControlMessage(GroupMessageDto groupMsg) {
+        String groupId = groupMsg.getGroupId();
+        if (groupId == null || groupId.isBlank()) {
+            return;
+        }
+        if (GroupManager.CONTROL_MEMBER_REMOVED.equals(groupMsg.getControlType())
+                && username.equals(groupMsg.getRemovedMemberId())) {
+            groupManager.removeGroup(groupId);
+            if (groupId.equals(selectedPeer)) {
+                clearActiveChat();
+            }
+            applyUserList(lastUserList);
+            flow("You were removed from the group", groupMsg.getGroupName(), ActivityFlowPanel.Tone.INFO);
+            return;
+        }
+
+        List<String> members = groupMembersFromMessage(groupMsg, groupMsg.getSenderId());
+        GroupManager.GroupInfo group = groupManager.registerGroup(
+                groupId, groupMsg.getGroupName(), members, groupMsg.getLeaderId());
+        ConversationItem item = findConversation(groupId);
+        if (item == null) {
+            item = groupConversationItem(group);
+            addConversation(item);
+        } else {
+            syncGroupConversationItem(item, group);
+        }
+        applyUserList(lastUserList);
+        if (groupId.equals(selectedPeer)) {
+            updatePeerHeader(findConversation(groupId));
+        }
+    }
+
+    private List<String> groupMembersFromMessage(GroupMessageDto groupMsg, String fallbackSender) {
+        LinkedHashSet<String> members = new LinkedHashSet<>();
+        if (groupMsg.getMemberIds() != null) {
+            members.addAll(groupMsg.getMemberIds());
+        }
+        if (members.isEmpty()) {
+            if (fallbackSender != null && !fallbackSender.isBlank()) {
+                members.add(fallbackSender);
+            }
+            if (groupMsg.getRecipientIds() != null) {
+                members.addAll(groupMsg.getRecipientIds());
+            }
+        }
+        members.add(username);
+        return new ArrayList<>(members);
+    }
+
     private void selectListItem(String peer) {
         if (peer == null || userList == null) {
             return;
@@ -2561,7 +3092,6 @@ public class ChatPanel extends JPanel {
     private void addMessageBubble(String text, boolean outgoing, String time, String senderId) {
         if (this.messageCount == 0) {
             messageContainer.removeAll();
-            messageContainer.add(Box.createVerticalGlue());
         }
         addMessageBubbleInternal(text, outgoing, time, senderId);
         this.messageCount++;
@@ -2574,10 +3104,9 @@ public class ChatPanel extends JPanel {
 
     private void addMessageBubbleInternal(String text, boolean outgoing, String time, String senderId) {
         JPanel row = new JPanel(new FlowLayout(
-                outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 4));
+                outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         if (!outgoing) {
             AvatarBadge avatar = new AvatarBadge(senderId != null ? senderId : selectedPeer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
@@ -2594,15 +3123,18 @@ public class ChatPanel extends JPanel {
             JLabel senderLabel = new JLabel("@" + senderId);
             senderLabel.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD, 11f));
             senderLabel.setForeground(UIConstants.SECURE_TEAL);
-            senderLabel.setBorder(new EmptyBorder(0, 6, 2, 0));
+            senderLabel.setBorder(new EmptyBorder(0, 0, 2, 0));
+            senderLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
             bubbleAndMeta.add(senderLabel);
         }
 
         MessageBubble bubble = new MessageBubble(text, outgoing);
+        bubble.setAlignmentX(Component.LEFT_ALIGNMENT);
         bubbleAndMeta.add(bubble);
 
-        JPanel metaRow = new JPanel(new FlowLayout(outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 8, 2));
+        JPanel metaRow = new JPanel(new FlowLayout(outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
         metaRow.setOpaque(false);
+        metaRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel timeLabel = UiStyles.mutedLabel(time);
         timeLabel.setFont(UIConstants.FONT_MONO.deriveFont(9f));
         timeLabel.setForeground(UIConstants.TEXT_MUTED);
@@ -2610,8 +3142,10 @@ public class ChatPanel extends JPanel {
         bubbleAndMeta.add(metaRow);
 
         row.add(bubbleAndMeta);
+        int rowHeight = row.getPreferredSize().height;
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, rowHeight));
         messageContainer.add(row);
-        messageContainer.add(Box.createVerticalStrut(8));
+        messageContainer.add(Box.createVerticalStrut(2));
     }
 
     private static final class ConversationItem {
@@ -2623,6 +3157,9 @@ public class ChatPanel extends JPanel {
         private final boolean placeholder;
         private int unreadCount;
         private boolean isGroup;
+        private int groupOnlineCount;
+        private int groupMemberCount;
+        private String leaderId;
 
         private ConversationItem(String userId, boolean online, boolean preKeyAvailable,
                 long lastSeenAt, boolean placeholder, boolean isGroup) {
@@ -2640,7 +3177,7 @@ public class ChatPanel extends JPanel {
 
         static ConversationItem manual(String userId) {
             boolean isGrp = userId.startsWith("group-");
-            return new ConversationItem(userId, isGrp, false, 0L, false, isGrp);
+            return new ConversationItem(userId, !isGrp, false, 0L, false, isGrp);
         }
 
         static ConversationItem legacy(String userId) {
@@ -2681,8 +3218,13 @@ public class ChatPanel extends JPanel {
             if (placeholder) {
                 return "Waiting for server...";
             }
+            if (isGroup && groupMemberCount > 0) {
+                return online
+                        ? groupOnlineCount + "/" + groupMemberCount + " members online"
+                        : "Need 2 members online";
+            }
             if (isGroup) {
-                return "Trò chuyện nhóm";
+                return "Group chat";
             }
             return online ? "Active now" : "Offline";
         }
@@ -2774,11 +3316,14 @@ public class ChatPanel extends JPanel {
             avatar.setValues(item.placeholder ? "" : item.userId,
                     Color.decode("#5B54F6"), item.online ? UIConstants.SECURE_TEAL : UIConstants.OUTLINE);
 
-            name.setText(item.displayName());
+            int availableTextWidth = availableTextWidth(list);
+            name.setText(clipText(name, item.displayName(), availableTextWidth));
             name.setForeground(item.placeholder ? UIConstants.TEXT_MUTED : UIConstants.TEXT_WHITE);
             time.setText(item.timeText());
 
-            status.setText(item.statusText());
+            String fullStatus = item.statusText();
+            status.setText(clipText(status, fullStatus, availableTextWidth));
+            status.setToolTipText(fullStatus);
             status.setForeground(UIConstants.TEXT_MUTED);
 
             if (item.unreadCount > 0) {
@@ -2791,6 +3336,35 @@ public class ChatPanel extends JPanel {
                 badge.setOpaque(false);
             }
             return this;
+        }
+
+        private static int availableTextWidth(JList<? extends ConversationItem> list) {
+            int listWidth = list == null || list.getWidth() <= 0 ? CHAT_LIST_WIDTH : list.getWidth();
+            Insets listInsets = list == null ? new Insets(0, 0, 0, 0) : list.getInsets();
+            int rendererInsets = 16;
+            int avatarAndGap = 48;
+            int scrollbarAllowance = 12;
+            return Math.max(72, listWidth - listInsets.left - listInsets.right
+                    - rendererInsets - avatarAndGap - scrollbarAllowance);
+        }
+
+        private static String clipText(JLabel label, String text, int maxWidth) {
+            if (text == null || text.isBlank()) {
+                return "";
+            }
+            return SwingUtilities.layoutCompoundLabel(
+                    label,
+                    label.getFontMetrics(label.getFont()),
+                    text,
+                    null,
+                    label.getVerticalAlignment(),
+                    label.getHorizontalAlignment(),
+                    label.getVerticalTextPosition(),
+                    label.getHorizontalTextPosition(),
+                    new Rectangle(0, 0, Math.max(1, maxWidth), 24),
+                    new Rectangle(),
+                    new Rectangle(),
+                    label.getIconTextGap());
         }
     }
 

@@ -67,9 +67,9 @@ public class ActivityFlowPanel extends JPanel {
     public ActivityFlowPanel(String title, String subtitle) {
         this.mainTitle = title;
         this.mainSubtitle = subtitle;
-        this.isRegisterMode = title.toLowerCase().contains("đăng ký") || title.toLowerCase().contains("register");
-        this.isChecklistMode = title.toLowerCase().contains("đăng nhập") || title.toLowerCase().contains("đăng ký") 
-                || title.toLowerCase().contains("register") || title.toLowerCase().contains("login");
+        String lowerTitle = title == null ? "" : title.toLowerCase();
+        this.isRegisterMode = lowerTitle.contains("register");
+        this.isChecklistMode = lowerTitle.contains("register") || lowerTitle.contains("login");
 
         setOpaque(false);
         setLayout(new BorderLayout());
@@ -106,7 +106,7 @@ public class ActivityFlowPanel extends JPanel {
 
         headerPanel.add(Box.createVerticalStrut(12));
 
-        String headerSubtitleText = "We set up an encrypted connection and distribute your keys before you sign in — so every message stays private.";
+        String headerSubtitleText = "We set up an encrypted connection and distribute your keys before you sign in - so every message stays private.";
         JLabel subtitleLabel = new JLabel("<html><body style='width: 260px; line-height: 1.5;'>" + headerSubtitleText + "</body></html>");
         subtitleLabel.setFont(UIConstants.FONT_BODY.deriveFont(14f));
         subtitleLabel.setForeground(UIConstants.TEXT_MUTED);
@@ -121,7 +121,7 @@ public class ActivityFlowPanel extends JPanel {
         stepsPanel.setAlignmentX(LEFT_ALIGNMENT);
 
         stepRows = new StepRow[4];
-        stepRows[0] = new StepRow(IconType.SERVER, "Servers connected", "3 secure relays · verified", 0);
+        stepRows[0] = new StepRow(IconType.SERVER, "Servers connected", "3 secure relays - verified", 0);
         stepRows[1] = new StepRow(IconType.SHIELD, "Identity verified", "Certificate trusted", 1);
         stepRows[2] = new StepRow(IconType.KEY, "Keys distributed", "Encryption keys shared across your devices", 2);
         stepRows[3] = new StepRow(IconType.SHARE, "Secure channel ready", "End-to-end encryption active", 3);
@@ -233,57 +233,59 @@ public class ActivityFlowPanel extends JPanel {
         if (isChecklistMode) {
             String key = (title + " " + body).toLowerCase();
             if (isRegisterMode) {
-                if (key.contains("sinh identity") || key.contains("keypair")) {
+                if (key.contains("starting registration") || key.contains("generate identity") || key.contains("keypair")) {
                     setStepState(0, StepState.ACTIVE);
-                } else if (key.contains("ký csr") || key.contains("csr")) {
-                    setStepState(0, StepState.SUCCESS);
-                    setStepState(1, StepState.ACTIVE);
-                } else if (key.contains("gửi tới ca") || key.contains("ca")) {
+                } else if (key.contains("send to ca") || key.contains("ca accepted") || key.contains("ca server")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
                     setStepState(2, StepState.ACTIVE);
-                } else if (key.contains("lưu keystore") || key.contains("keystore")) {
+                } else if (key.contains("save keystore") || key.contains("keystore")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
                     setStepState(2, StepState.SUCCESS);
                     setStepState(3, StepState.ACTIVE);
-                } else if (key.contains("hoàn tất") || key.contains("thành công")) {
+                } else if (key.contains("registration complete") || key.contains("complete") || key.contains("success")) {
                     for (int i = 0; i < 4; i++) {
                         setStepState(i, StepState.SUCCESS);
                     }
-                }
-            } else {
-                if (key.contains("đồng bộ thời gian") || key.contains("ntp")) {
-                    setStepState(0, StepState.ACTIVE);
-                } else if (key.contains("thời gian hợp lệ")) {
-                    setStepState(0, StepState.SUCCESS);
-                } else if (key.contains("xin tgt")) {
+                } else if (key.contains("sign csr") || key.contains("csr")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.ACTIVE);
-                } else if (key.contains("tgt đã cấp")) {
+                }
+            } else {
+                if (key.contains("synchronize time") || key.contains("processing session") || key.contains("ntp")) {
+                    setStepState(0, StepState.ACTIVE);
+                } else if (key.contains("time validated")) {
+                    setStepState(0, StepState.SUCCESS);
+                } else if (key.contains("request tgt") || key.contains("starting kerberos")) {
+                    setStepState(0, StepState.SUCCESS);
+                    setStepState(1, StepState.ACTIVE);
+                } else if (key.contains("tgt issued")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
-                } else if (key.contains("xin st")) {
+                } else if (key.contains("request st")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
                     setStepState(2, StepState.ACTIVE);
-                } else if (key.contains("st đã cấp")) {
+                } else if (key.contains("st issued")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
                     setStepState(2, StepState.SUCCESS);
-                } else if (key.contains("mở csdl") || key.contains("handshake")) {
+                } else if (key.contains("connect to chat server") || key.contains("st accepted")
+                        || key.contains("unlock local database") || key.contains("handshake")
+                        || key.contains("pre-key bundle uploaded")) {
                     setStepState(0, StepState.SUCCESS);
                     setStepState(1, StepState.SUCCESS);
                     setStepState(2, StepState.SUCCESS);
                     setStepState(3, StepState.ACTIVE);
-                } else if (key.contains("phiên sẵn sàng") || key.contains("hoàn tất")) {
+                } else if (key.contains("session ready") || key.contains("complete")) {
                     for (int i = 0; i < 4; i++) {
                         setStepState(i, StepState.SUCCESS);
                     }
                 }
             }
 
-            if (effectiveTone == Tone.ERROR || key.contains("thất bại") || key.contains("từ chối")) {
+            if (effectiveTone == Tone.ERROR || key.contains("failed") || key.contains("rejected")) {
                 for (int i = 0; i < 4; i++) {
                     if (stepRows[i].getState() == StepState.ACTIVE) {
                         stepRows[i].setState(StepState.ERROR);
@@ -343,16 +345,16 @@ public class ActivityFlowPanel extends JPanel {
             return true;
         }
         String text = (safe(title) + " " + safe(body)).toLowerCase();
-        if (text.contains("message key") || text.contains("giải mã") || text.contains("đã route")
-                || text.contains("chuẩn bị gửi") || text.contains("mở hội thoại") || text.contains("tin mới")) {
+        if (text.contains("message key") || text.contains("decrypt") || text.contains("routed")
+                || text.contains("prepare send") || text.contains("open conversation") || text.contains("new message")) {
             return false;
         }
         return text.contains("tgt") || text.contains("st ") || text.contains("service ticket")
                 || text.contains("kerberos") || text.contains("handshake") || text.contains("pre-key")
                 || text.contains("e2ee init") || text.contains("ratchet") || text.contains("opk")
                 || text.contains("ml-kem") || text.contains("ecdhe") || text.contains("csr")
-                || text.contains("chứng chỉ") || text.contains("certificate") || text.contains("identity keypair")
-                || text.contains("proof-of-possession") || text.contains("keystore") || text.contains("phiên sẵn sàng");
+                || text.contains("certificate") || text.contains("identity keypair")
+                || text.contains("proof-of-possession") || text.contains("keystore") || text.contains("session ready");
     }
 
     private static String safe(String value) {
@@ -583,13 +585,13 @@ public class ActivityFlowPanel extends JPanel {
             titleLabel.setForeground(state == StepState.PENDING ? UIConstants.TEXT_MUTED : UIConstants.TEXT_WHITE);
             detailLabel.setForeground(state == StepState.PENDING ? UIConstants.TEXT_MUTED : (state == StepState.ERROR ? UIConstants.SIGNAL_RED : UIConstants.TEXT_SILVER));
             if (state == StepState.SUCCESS) {
-                checkmarkLabel.setText("✓");
+                checkmarkLabel.setText("OK");
                 checkmarkLabel.setForeground(UIConstants.SECURE_TEAL);
             } else if (state == StepState.ERROR) {
-                checkmarkLabel.setText("✗");
+                checkmarkLabel.setText("X");
                 checkmarkLabel.setForeground(UIConstants.SIGNAL_RED);
             } else if (state == StepState.ACTIVE) {
-                checkmarkLabel.setText("•");
+                checkmarkLabel.setText("*");
                 checkmarkLabel.setForeground(UIConstants.SECURE_TEAL);
             } else {
                 checkmarkLabel.setText("");

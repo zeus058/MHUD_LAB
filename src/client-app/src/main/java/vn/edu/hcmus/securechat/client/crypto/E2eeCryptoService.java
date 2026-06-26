@@ -105,13 +105,13 @@ public class E2eeCryptoService {
     }
 
     /**
-     * Kết nối Chat Server và xác thực bằng ST. Sau đó upload Pre-Key Bundle để
-     * peer có thể thiết lập E2EE v2 mà server không biết khóa nội dung.
+     * Connects to Chat Server with ST authentication, then uploads a Pre-Key Bundle
+     * so peers can establish E2EE v2 without exposing content keys to the server.
      */
     public void performHandshake(String username, char[] password) throws Exception {
-        fire("Kết nối Chat Server", "Mở socket tới " + ServerConfig.CHAT_HOST + ":" + ServerConfig.CHAT_PORT
-                + " và chuẩn bị ST authenticator.", ActivityTone.INFO);
-        log.info("Kết nối đến Chat Server {}:{}", ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
+        fire("Connect to Chat Server", "Opening socket to " + ServerConfig.CHAT_HOST + ":" + ServerConfig.CHAT_PORT
+                + " and preparing the ST authenticator.", ActivityTone.INFO);
+        log.info("Connecting to Chat Server {}:{}", ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
 
         byte[] stCacheData = null;
         byte[] sessionKey = null;
@@ -121,13 +121,13 @@ public class E2eeCryptoService {
             stCacheData = vn.edu.hcmus.securechat.client.kerberos.TicketCache
                     .getTicket(username, "ST_" + ServerConfig.CHAT_HOST, password);
             if (stCacheData == null) {
-                throw new Exception("Không tìm thấy ST trong cache. Vui lòng đăng nhập lại.");
+                throw new Exception("ST was not found in cache. Please sign in again.");
             }
 
             String cacheStr = new String(stCacheData, StandardCharsets.UTF_8);
             String[] parts = cacheStr.split("\\|\\|\\|");
             if (parts.length < 2) {
-                throw new Exception("Định dạng dữ liệu ST cache không hợp lệ.");
+                throw new Exception("Invalid ST cache data format.");
             }
             String stBase64 = parts[0];
             sessionKey = Base64.getDecoder().decode(parts[1]);
@@ -163,28 +163,28 @@ public class E2eeCryptoService {
             if (response.getType() == PacketFrame.TYPE_ERROR) {
                 String err = new String(response.getPayload(), StandardCharsets.UTF_8);
                 chatSocket.close();
-                throw new Exception("Chat Server từ chối handshake: " + err);
+                throw new Exception("Chat Server rejected the handshake: " + err);
             }
             if (response.getType() != PacketFrame.TYPE_CHAT_HANDSHAKE) {
                 chatSocket.close();
-                throw new Exception("Chat Server trả về response không hợp lệ.");
+                throw new Exception("Chat Server returned an invalid response.");
             }
 
             ChatHandshakeResponse handshake = JsonSerializer.fromBytes(
                     response.getPayload(), ChatHandshakeResponse.class);
             if (!"OK".equalsIgnoreCase(handshake.getStatus())) {
-                throw new Exception("Chat Server không xác nhận phiên truy cập.");
+                throw new Exception("Chat Server did not confirm the access session.");
             }
-            fire("ST được chấp nhận", "Chat Server đã xác thực vé dịch vụ, Control Vector và authenticator.",
+            fire("ST accepted", "Chat Server verified the service ticket, Control Vector, and authenticator.",
                     ActivityTone.SUCCESS);
 
             chatSocket.setSoTimeout(0);
             uploadLocalPreKeyBundle(username, password);
-            log.info("Chat Server handshake thành công cho user={}", username);
+            log.info("Chat Server handshake succeeded for user={}", username);
         } catch (Exception e) {
-            fire("Handshake thất bại", e.getMessage(), ActivityTone.ERROR);
-            log.error("E2EE Handshake thất bại", e);
-            throw new Exception("Handshake đến Chat Server thất bại: " + e.getMessage(), e);
+            fire("Handshake failed", e.getMessage(), ActivityTone.ERROR);
+            log.error("E2EE handshake failed", e);
+            throw new Exception("Chat Server handshake failed: " + e.getMessage(), e);
         } finally {
             zero(stCacheData);
             zero(sessionKey);
@@ -219,7 +219,7 @@ public class E2eeCryptoService {
                 session = ratchetSessions.get(envelope.getSenderId());
             }
             if (session == null) {
-                throw new ProtocolException("Chưa có Double Ratchet session với " + envelope.getSenderId());
+                throw new ProtocolException("No Double Ratchet session with " + envelope.getSenderId());
             }
             ChatMessage msg = session.decrypt(envelope);
             saveSessions();
@@ -245,8 +245,8 @@ public class E2eeCryptoService {
             future.complete(bundle);
         }
         int opk = bundle.getOneTimePreKeys() == null ? 0 : bundle.getOneTimePreKeys().size();
-        fire("Nhận Pre-Key Bundle", "Đã nhận bundle của @" + bundle.getOwnerId()
-                + " với " + opk + " one-time pre-key.", ActivityTone.INFO);
+        fire("Pre-Key Bundle received", "Received bundle for @" + bundle.getOwnerId()
+                + " with " + opk + " one-time pre-key.", ActivityTone.INFO);
     }
 
     public void acceptE2eeInit(E2eeInitMessage init) throws Exception {
@@ -281,11 +281,11 @@ public class E2eeCryptoService {
 
             if (init.getUsedOneTimePreKeyId() != null
                     && oneTimePreKeyPrivate.remove(init.getUsedOneTimePreKeyId()) != null) {
-                fire("OPK đã tiêu thụ", "One-time pre-key #" + init.getUsedOneTimePreKeyId()
-                        + " được dùng đúng một lần cho @" + init.getSenderId() + ".", ActivityTone.SUCCESS);
+                fire("OPK consumed", "One-time pre-key #" + init.getUsedOneTimePreKeyId()
+                        + " was used exactly once for @" + init.getSenderId() + ".", ActivityTone.SUCCESS);
                 savePreKeyStoreQuietly();
             }
-            fire("E2EE Init hợp lệ", "Đã xác minh transcript và mở Double Ratchet với @"
+            fire("E2EE init validated", "Transcript verified and Double Ratchet opened with @"
                     + init.getSenderId() + ".", ActivityTone.SUCCESS);
         } finally {
             zero(ssEcdhe);
@@ -300,7 +300,7 @@ public class E2eeCryptoService {
             entry.getValue().completeExceptionally(error);
         }
         pendingPreKeyRequests.clear();
-        fire("Server báo lỗi", message == null ? "Yêu cầu hiện tại bị từ chối." : message, ActivityTone.ERROR);
+        fire("Server error", message == null ? "The current request was rejected." : message, ActivityTone.ERROR);
     }
 
     public byte[] getMasterSessionKey() {
@@ -347,7 +347,7 @@ public class E2eeCryptoService {
     private void uploadLocalPreKeyBundle(String username, char[] password) throws Exception {
         X509Certificate cert = PkiManager.getCertificate();
         if (cert == null || PkiManager.getPrivateKey() == null) {
-            throw new ProtocolException("Chưa tải identity certificate để ký Pre-Key Bundle.");
+            throw new ProtocolException("Identity certificate has not been loaded for signing the Pre-Key Bundle.");
         }
 
         this.identityCertBase64 = Base64.getEncoder().encodeToString(cert.getEncoded());
@@ -358,8 +358,8 @@ public class E2eeCryptoService {
             sendFrame(PacketFrame.TYPE_PREKEY_UPLOAD, JsonSerializer.toBytes(localPreKeyBundle));
             int opkCount = localPreKeyBundle.getOneTimePreKeys() == null
                     ? 0 : localPreKeyBundle.getOneTimePreKeys().size();
-            fire("Tải Pre-Key cục bộ", "Đã khôi phục signed pre-key và " + opkCount
-                    + " one-time pre-key để nhận tin offline.", ActivityTone.SUCCESS);
+            fire("Local Pre-Key loaded", "Restored signed pre-key and " + opkCount
+                    + " one-time pre-key for receiving offline messages.", ActivityTone.SUCCESS);
             return;
         }
 
@@ -391,8 +391,8 @@ public class E2eeCryptoService {
         savePreKeyStore();
 
         sendFrame(PacketFrame.TYPE_PREKEY_UPLOAD, JsonSerializer.toBytes(bundle));
-        fire("Upload Pre-Key Bundle", "Đã công bố signed pre-key và " + OPK_POOL_SIZE
-                + " one-time pre-key kèm chữ ký RSA.", ActivityTone.SUCCESS);
+        fire("Pre-Key Bundle uploaded", "Published signed pre-key and " + OPK_POOL_SIZE
+                + " one-time pre-key with RSA signature.", ActivityTone.SUCCESS);
     }
 
     private void initializePreKeyStore(String username, char[] password) throws Exception {
@@ -437,7 +437,7 @@ public class E2eeCryptoService {
             json = AesGcmCipher.decrypt(preKeyStoreKey, encrypted, PREKEY_STORE_AAD);
             PersistedPreKeyStore store = JsonSerializer.fromBytes(json, PersistedPreKeyStore.class);
             if (!Objects.equals(identityCertBase64, store.identityCertBase64)) {
-                fire("Pre-Key cần xoay mới", "Identity certificate đã đổi nên client sẽ sinh bundle mới.",
+                fire("Pre-Key rotation needed", "Identity certificate changed, so the client will generate a new bundle.",
                         ActivityTone.INFO);
                 return false;
             }
@@ -445,7 +445,7 @@ public class E2eeCryptoService {
             return localPreKeyBundle != null && signedPreKeyEcdh != null;
         } catch (Exception e) {
             log.warn("Could not load persisted pre-key store", e);
-            fire("Không đọc được Pre-Key cũ", "Client sẽ sinh bundle mới; tin offline cũ có thể không mở được.",
+            fire("Old Pre-Key could not be read", "The client will generate a new bundle; old offline messages may not open.",
                     ActivityTone.ERROR);
             return false;
         } finally {
@@ -456,7 +456,7 @@ public class E2eeCryptoService {
 
     private void applyPreKeyStore(PersistedPreKeyStore store) throws Exception {
         if (store == null || store.bundle == null) {
-            throw new ProtocolException("Pre-Key store rỗng.");
+            throw new ProtocolException("Pre-Key store is empty.");
         }
         signedPreKeyId = store.signedPreKeyId;
         signedPreKeyEcdhPub = store.signedPreKeyEcdhPub;
@@ -521,7 +521,7 @@ public class E2eeCryptoService {
             savePreKeyStore();
         } catch (Exception e) {
             log.warn("Could not persist pre-key store", e);
-            fire("Không lưu được Pre-Key", "OPK đã dùng chưa được ghi lại vào kho cục bộ.",
+            fire("Pre-Key could not be saved", "The used OPK was not written back to local storage.",
                     ActivityTone.ERROR);
         }
     }
@@ -538,8 +538,8 @@ public class E2eeCryptoService {
     }
 
     private DoubleRatchetSession establishOutboundSession(String peerId) throws Exception {
-        fire("Xin Pre-Key Bundle", "Yêu cầu Chat Server phát bundle của @" + peerId
-                + "; server chỉ chuyển tiếp khóa công khai.", ActivityTone.INFO);
+        fire("Request Pre-Key Bundle", "Asking Chat Server for @" + peerId
+                + "'s bundle; the server only forwards public keys.", ActivityTone.INFO);
         PreKeyBundle bundle = requestPeerPreKeyBundle(peerId);
         verifyBundle(bundle);
 
@@ -581,7 +581,7 @@ public class E2eeCryptoService {
             sessionsByConversation.put(conversationId, session);
             saveSessions();
             sendFrame(PacketFrame.TYPE_E2EE_INIT, JsonSerializer.toBytes(init));
-            fire("E2EE Init đã gửi", "Transcript bao phủ ECDHE và pre-key đã chọn cho @"
+            fire("E2EE init sent", "Transcript covers ECDHE and the selected pre-key for @"
                     + peerId + ".", ActivityTone.SUCCESS);
             return session;
         } finally {
@@ -604,17 +604,17 @@ public class E2eeCryptoService {
             return future.get(PREKEY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             pendingPreKeyRequests.remove(peerId);
-            throw new ProtocolException("Hết thời gian chờ Pre-Key Bundle của @" + peerId, e);
+            throw new ProtocolException("Timed out waiting for Pre-Key Bundle from @" + peerId, e);
         }
     }
 
     private void verifyBundle(PreKeyBundle bundle) throws Exception {
         if (bundle == null || isBlank(bundle.getOwnerId())) {
-            throw new ProtocolException("Pre-Key Bundle rỗng.");
+            throw new ProtocolException("Pre-Key Bundle is empty.");
         }
         if (isBlank(bundle.getIdentityCertEcdsa())
                 || isBlank(bundle.getSignedPreKeyEcdh())) {
-            throw new ProtocolException("Pre-Key Bundle thiếu khóa bắt buộc.");
+            throw new ProtocolException("Pre-Key Bundle is missing required keys.");
         }
 
         if (!isBlank(bundle.getBundleSignatureEcdsa())) {
@@ -629,8 +629,8 @@ public class E2eeCryptoService {
                     signedPreKeyTranscript(bundle),
                     bundle.getSignedPreKeySignatureEcdsa());
         }
-        fire("Xác minh Pre-Key", "Chữ ký X.509 của bundle @" + bundle.getOwnerId()
-                + " hợp lệ; server không được xem là nguồn tin cậy cuối.", ActivityTone.SUCCESS);
+        fire("Verify Pre-Key", "X.509 signature for bundle @" + bundle.getOwnerId()
+                + " is valid; the server is not treated as the final trust source.", ActivityTone.SUCCESS);
     }
 
     private SelectedPreKey selectRemotePreKey(PreKeyBundle bundle) {
@@ -651,12 +651,12 @@ public class E2eeCryptoService {
             if (usedOneTimePreKeyId == signedPreKeyId) {
                 return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyEcdhPub);
             }
-            throw new ProtocolException("One-time pre-key #" + usedOneTimePreKeyId + " không còn khả dụng.");
+            throw new ProtocolException("One-time pre-key #" + usedOneTimePreKeyId + " is no longer available.");
         }
         if (signedPreKeyEcdh != null) {
             return new PreKeyMaterial(signedPreKeyId, signedPreKeyEcdh, signedPreKeyEcdhPub);
         }
-        throw new ProtocolException("Không tìm thấy private pre-key để mở E2EE init.");
+        throw new ProtocolException("Private pre-key for opening E2EE init was not found.");
     }
 
     private void validateIncomingInit(E2eeInitMessage init) throws ProtocolException {
@@ -668,10 +668,10 @@ public class E2eeCryptoService {
                 || isBlank(init.getNonce())
                 || isBlank(init.getTranscriptHash())
                 || isBlank(init.getSignatureEcdsa())) {
-            throw new ProtocolException("E2EE init thiếu trường bắt buộc.");
+            throw new ProtocolException("E2EE init is missing required fields.");
         }
         if (!Objects.equals(currentUsername, init.getRecipientId())) {
-            throw new ProtocolException("E2EE init không dành cho client hiện tại.");
+            throw new ProtocolException("E2EE init is not intended for the current client.");
         }
     }
 
@@ -737,7 +737,7 @@ public class E2eeCryptoService {
         byte[] signatureBytes = Base64.getDecoder().decode(signatureBase64);
         try {
             if (!signature.verify(signatureBytes)) {
-                throw new ProtocolException("Chữ ký transcript hoặc Pre-Key Bundle không hợp lệ.");
+                throw new ProtocolException("Transcript or Pre-Key Bundle signature is invalid.");
             }
         } finally {
             zero(signatureBytes);
@@ -941,7 +941,7 @@ public class E2eeCryptoService {
                     sessionsByConversation.put(s.conversationId, session);
                     ratchetSessions.put(s.remoteId, session);
                 }
-                log.info("Khôi phục thành công {} Double Ratchet sessions cho user={}", ps.sessions.size(), currentUsername);
+                log.info("Restored {} Double Ratchet sessions for user={}", ps.sessions.size(), currentUsername);
             }
         } catch (Exception e) {
             log.warn("Could not load E2EE Double Ratchet sessions", e);

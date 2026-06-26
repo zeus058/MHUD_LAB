@@ -23,7 +23,7 @@ import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.exception.KeyDerivationException;
 
 /**
- * CSDL SQLite cục bộ — tin nhắn mã hóa tĩnh bằng khóa Argon2id (BaoCao_NangCap.md v2.0).
+ * Local SQLite database with messages encrypted at rest by an Argon2id-derived key.
  */
 public class LocalDatabase {
     private static final Logger log = LoggerFactory.getLogger(LocalDatabase.class);
@@ -42,19 +42,19 @@ public class LocalDatabase {
     }
 
     /**
-     * Dẫn xuất khóa Argon2id từ password; salt lưu riêng theo user.
+     * Derives the Argon2id key from the password; each user has a separate salt.
      */
     public void unlockDatabase(char[] password) throws KeyDerivationException {
-        log.info("Dẫn xuất khóa Argon2id cho user={}", username);
+        log.info("Deriving Argon2id key for user={}", username);
         try {
             ClientStoragePaths.ensureUserDir(username);
             byte[] salt = loadOrCreateSalt();
             this.dbKey = Argon2idKeyDerivation.deriveDbKey(password, salt);
-            log.info("Mở khóa CSDL thành công: {}", ClientStoragePaths.messagesSqliteFile(username));
+            log.info("Local database unlocked: {}", ClientStoragePaths.messagesSqliteFile(username));
         } catch (KeyDerivationException e) {
             throw e;
         } catch (Exception e) {
-            throw new KeyDerivationException("Không mở khóa được CSDL cục bộ", e);
+            throw new KeyDerivationException("Unable to unlock local database", e);
         }
     }
 
@@ -81,7 +81,8 @@ public class LocalDatabase {
                 String sqlGroup = "CREATE TABLE IF NOT EXISTS group_metadata ("
                         + "group_id TEXT PRIMARY KEY,"
                         + "group_name TEXT NOT NULL,"
-                        + "members TEXT NOT NULL"
+                        + "members TEXT NOT NULL,"
+                        + "leader_id TEXT"
                         + ");";
                 stmt.execute(sqlGroup);
 
@@ -95,26 +96,32 @@ public class LocalDatabase {
                 } catch (Exception ignored) {
                     // column exists
                 }
-                log.info("Khởi tạo SQLite messages cho user={}", username);
+                try {
+                    stmt.execute("ALTER TABLE group_metadata ADD COLUMN leader_id TEXT");
+                } catch (Exception ignored) {
+                    // column exists
+                }
+                log.info("Initialized SQLite messages for user={}", username);
             }
         } catch (Exception e) {
-            log.error("Lỗi khi khởi tạo SQLite", e);
+            log.error("Failed to initialize SQLite", e);
         }
     }
 
-    public record GroupInfoRecord(String groupId, String groupName, String members) {}
+    public record GroupInfoRecord(String groupId, String groupName, String members, String leaderId) {}
 
-    public void saveGroup(String groupId, String groupName, String members) {
+    public void saveGroup(String groupId, String groupName, String members, String leaderId) {
         try (Connection conn = DriverManager.getConnection(jdbcUrl);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "INSERT OR REPLACE INTO group_metadata(group_id, group_name, members) VALUES(?, ?, ?)")) {
+                     "INSERT OR REPLACE INTO group_metadata(group_id, group_name, members, leader_id) VALUES(?, ?, ?, ?)")) {
             pstmt.setString(1, groupId);
             pstmt.setString(2, groupName);
             pstmt.setString(3, members);
+            pstmt.setString(4, leaderId);
             pstmt.executeUpdate();
             log.info("Saved group metadata: groupId={}, name={}", groupId, groupName);
         } catch (Exception e) {
-            log.error("Lỗi lưu metadata nhóm", e);
+            log.error("Failed to save group metadata", e);
         }
     }
 
@@ -133,7 +140,7 @@ public class LocalDatabase {
             }
             log.info("Deleted group from local DB: groupId={}", groupId);
         } catch (Exception e) {
-            log.error("Lỗi xóa nhóm khỏi DB", e);
+            log.error("Failed to delete group from DB", e);
         }
     }
 
@@ -141,23 +148,24 @@ public class LocalDatabase {
         java.util.List<GroupInfoRecord> list = new java.util.ArrayList<>();
         try (Connection conn = DriverManager.getConnection(jdbcUrl);
              Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT group_id, group_name, members FROM group_metadata")) {
+             ResultSet rs = stmt.executeQuery("SELECT group_id, group_name, members, leader_id FROM group_metadata")) {
             while (rs.next()) {
                 list.add(new GroupInfoRecord(
                         rs.getString("group_id"),
                         rs.getString("group_name"),
-                        rs.getString("members")
+                        rs.getString("members"),
+                        rs.getString("leader_id")
                 ));
             }
         } catch (Exception e) {
-            log.error("Lỗi tải danh sách nhóm từ DB", e);
+            log.error("Failed to load groups from DB", e);
         }
         return list;
     }
 
     public void saveMessage(String owner, String peer, String sender, String content, long timestamp) {
         if (dbKey == null) {
-            log.warn("Bỏ qua lưu tin nhắn — CSDL chưa được mở khóa");
+            log.warn("Skipping message save because the local database is locked");
             return;
         }
 
@@ -175,7 +183,7 @@ public class LocalDatabase {
             pstmt.setLong(5, timestamp);
             pstmt.executeUpdate();
         } catch (Exception e) {
-            log.error("Lỗi lưu tin nhắn", e);
+            log.error("Failed to save message", e);
         } finally {
             Arrays.fill(plainText, (byte) 0);
         }
@@ -210,13 +218,13 @@ public class LocalDatabase {
                 }
             }
         } catch (Exception e) {
-            log.error("Lỗi đọc tin nhắn", e);
+            log.error("Failed to read messages", e);
         }
         return list;
     }
 
     /**
-     * Salt Argon2id: 32 bytes riêng cho từng user.
+     * Argon2id salt: 32 bytes per user.
      */
     private byte[] loadOrCreateSalt() throws IOException {
         if (Files.exists(saltDbFile) && Files.size(saltDbFile) >= CryptoConstants.ARGON2ID_SALT_SIZE) {
@@ -244,12 +252,12 @@ public class LocalDatabase {
             if (Files.exists(legacySalt)) {
                 byte[] salt = Files.readAllBytes(legacySalt);
                 if (salt.length == CryptoConstants.ARGON2ID_SALT_SIZE) {
-                    log.info("Di chuyển salt cũ sang {}", saltDbFile);
+                    log.info("Migrating legacy salt to {}", saltDbFile);
                     return salt;
                 }
             }
         } catch (IOException e) {
-            log.warn("Không đọc được salt cũ", e);
+            log.warn("Could not read legacy salt", e);
         }
         return null;
     }
@@ -265,7 +273,7 @@ public class LocalDatabase {
                 : (Files.exists(legacyInData) ? legacyInData : null);
         if (source != null) {
             Files.copy(source, target);
-            log.info("Sao chép CSDL cũ {} → {}", source, target);
+            log.info("Copying legacy database {} -> {}", source, target);
         }
     }
 }

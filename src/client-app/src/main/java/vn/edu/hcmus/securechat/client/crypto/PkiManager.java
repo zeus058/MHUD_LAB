@@ -30,17 +30,17 @@ import vn.edu.hcmus.securechat.common.protocol.dto.CertificateSigningRequest;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 
 /**
- * Quản lý sinh khóa RSA, tạo CSR và lưu trữ KeyStore cục bộ.
+ * Manages RSA key generation, CSR creation, and local KeyStore storage.
  */
 public class PkiManager {
     private static final Logger log = LoggerFactory.getLogger(PkiManager.class);
     
-    // Lưu trữ tạm thời KeyPair để dùng trong phiên (đợi nhận cert)
+    // Temporary KeyPair for the current registration session.
     private static KeyPair currentKeyPair;
     private static X509Certificate currentCertificate;
 
     /**
-     * Sinh cặp khóa RSA 2048.
+     * Generates an RSA-2048 key pair.
      */
     public static void generateKeyPair(String username) throws Exception {
         log.info("Generating RSA-2048 KeyPair for user: {}", username);
@@ -51,14 +51,14 @@ public class PkiManager {
     }
 
     /**
-     * Tạo DTO CertificateSigningRequest với định dạng chuẩn của ca-server.
+     * Creates the CertificateSigningRequest DTO expected by ca-server.
      */
     public static CertificateSigningRequest createCsrPayload(String subjectDn) throws Exception {
         if (currentKeyPair == null) {
             throw new IllegalStateException("KeyPair has not been generated yet.");
         }
 
-        // 1. PublicKey dạng Base64 (Raw DER)
+        // 1. PublicKey as Base64 (raw DER)
         String pubKeyBase64 = Base64.getEncoder().encodeToString(currentKeyPair.getPublic().getEncoded());
 
         // 2. Nonce 16 bytes random (Base64)
@@ -66,7 +66,7 @@ public class PkiManager {
         new SecureRandom().nextBytes(nonceBytes);
         String nonceBase64 = Base64.getEncoder().encodeToString(nonceBytes);
 
-        // 3. Signature trên subjectDn | publicKey | nonce
+        // 3. Signature over subjectDn | publicKey | nonce
         String dataToSign = subjectDn + "|" + pubKeyBase64 + "|" + nonceBase64;
         Signature sig = Signature.getInstance("SHA256withRSA");
         sig.initSign(currentKeyPair.getPrivate());
@@ -77,7 +77,7 @@ public class PkiManager {
     }
 
     /**
-     * Lưu Private Key và Certificate Chain vào file PKCS12, bảo vệ bằng password.
+     * Saves Private Key and Certificate Chain into a password-protected PKCS12 file.
      */
     public static void saveKeyStore(String username, char[] password, String certBase64, String caChainBase64) throws Exception {
         if (currentKeyPair == null) {
@@ -101,7 +101,7 @@ public class PkiManager {
         
         Certificate[] chain = chainList.toArray(new Certificate[0]);
 
-        // Tạo KeyStore PKCS12
+        // Create PKCS12 KeyStore
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(null, null); // Initialize empty keystore
 
@@ -118,7 +118,7 @@ public class PkiManager {
     }
 
     /**
-     * Tải KeyStore từ file PKCS12 bằng password của người dùng.
+     * Loads the PKCS12 KeyStore with the user's password.
      */
     public static void loadKeyStore(String username, char[] password) throws Exception {
         Path ksPath = resolveKeystorePath(username);
@@ -163,7 +163,7 @@ public class PkiManager {
         if (Files.isRegularFile(legacy)) {
             ClientStoragePaths.ensureUserDir(username);
             Files.copy(legacy, current, StandardCopyOption.REPLACE_EXISTING);
-            log.info("Di chuyển keystore cũ {} → {}", legacy, current);
+            log.info("Migrating legacy keystore {} -> {}", legacy, current);
             return current;
         }
         return null;

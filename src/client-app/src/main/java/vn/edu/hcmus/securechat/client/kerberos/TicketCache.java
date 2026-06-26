@@ -17,8 +17,8 @@ import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
 import vn.edu.hcmus.securechat.common.crypto.Pbkdf2KeyDerivation;
 
 /**
- * Cache vé TGT/ST — v2 format: ["SC2A"][Argon2id salt 32 bytes][AES-GCM ciphertext].
- * Legacy PBKDF2 cache vẫn được đọc để di trú dữ liệu cũ.
+ * TGT/ST ticket cache. v2 format: ["SC2A"][Argon2id salt 32 bytes][AES-GCM ciphertext].
+ * Legacy PBKDF2 cache is still readable for migration.
  */
 public class TicketCache {
     private static final Logger log = LoggerFactory.getLogger(TicketCache.class);
@@ -29,7 +29,7 @@ public class TicketCache {
 
     public static void saveTicket(String username, String ticketName, byte[] ticketData, char[] password)
             throws IOException, vn.edu.hcmus.securechat.common.exception.CryptoException {
-        log.info("Mã hóa và lưu vé {} cho user={}", ticketName, username);
+        log.info("Encrypting and saving ticket {} for user={}", ticketName, username);
         byte[] key = null;
         byte[] salt = null;
         byte[] encrypted = null;
@@ -47,7 +47,7 @@ public class TicketCache {
             System.arraycopy(salt, 0, output, MAGIC_ARGON2ID.length, salt.length);
             System.arraycopy(encrypted, 0, output, MAGIC_ARGON2ID.length + salt.length, encrypted.length);
             Files.write(file, output);
-            log.info("Đã lưu {} → {}", ticketName, file);
+            log.info("Saved {} -> {}", ticketName, file);
         } finally {
             if (key != null) {
                 Arrays.fill(key, (byte) 0);
@@ -65,7 +65,7 @@ public class TicketCache {
     }
 
     public static byte[] getTicket(String username, String ticketName, char[] password) {
-        log.info("Đọc vé {} cho user={}", ticketName, username);
+        log.info("Reading ticket {} for user={}", ticketName, username);
         byte[] key = null;
         try {
             Path file = ClientStoragePaths.ticketCacheFile(username, ticketName);
@@ -96,7 +96,7 @@ public class TicketCache {
             }
             return AesGcmCipher.decrypt(key, encrypted);
         } catch (Exception e) {
-            log.error("Lỗi khi đọc ticket", e);
+            log.error("Failed to read ticket", e);
         } finally {
             if (key != null) {
                 Arrays.fill(key, (byte) 0);
@@ -118,13 +118,13 @@ public class TicketCache {
                             try {
                                 Files.deleteIfExists(p);
                             } catch (IOException e) {
-                                log.warn("Không xóa được {}", p, e);
+                                log.warn("Could not delete {}", p, e);
                             }
                         });
             }
-            log.info("Đã xóa ticket cache của user={}", username);
+            log.info("Cleared ticket cache for user={}", username);
         } catch (IOException e) {
-            log.error("Lỗi xóa ticket cache", e);
+            log.error("Failed to clear ticket cache", e);
         }
     }
 
@@ -142,10 +142,10 @@ public class TicketCache {
             byte[] salt = Arrays.copyOfRange(fileData, 0, CryptoConstants.PBKDF2_SALT_SIZE);
             byte[] encrypted = Arrays.copyOfRange(fileData, CryptoConstants.PBKDF2_SALT_SIZE, fileData.length);
             key = Pbkdf2KeyDerivation.deriveDbKey(password, salt);
-            log.info("Đọc vé legacy từ {}", legacy);
+            log.info("Reading legacy ticket from {}", legacy);
             return AesGcmCipher.decrypt(key, encrypted);
         } catch (Exception e) {
-            log.warn("Không đọc được vé legacy {}", legacy, e);
+            log.warn("Could not read legacy ticket {}", legacy, e);
             return null;
         } finally {
             if (key != null) {

@@ -29,8 +29,7 @@ import vn.edu.hcmus.securechat.client.db.LocalDatabase;
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 
 /**
- * Client Application — Ứng dụng Desktop chat bảo mật E2EE.
- * Owner: Trúc Ngọc | Reviewer: Chị Bee
+ * SecureChat desktop client with E2EE messaging.
  */
 public class ClientApp extends JFrame {
 
@@ -90,8 +89,8 @@ public class ClientApp extends JFrame {
             @Override
             public void onRegisterSuccess(String username) {
                 JOptionPane.showMessageDialog(ClientApp.this,
-                        "Tài khoản @" + username + " đã được tạo thành công.\nBạn có thể đăng nhập ngay.",
-                        "Đăng ký thành công",
+                        "Account @" + username + " was created successfully.\nYou can sign in now.",
+                        "Registration successful",
                         JOptionPane.INFORMATION_MESSAGE);
                 showLogin();
             }
@@ -119,7 +118,7 @@ public class ClientApp extends JFrame {
     }
 
     /**
-     * Kết nối Kerberos + E2EE handshake trước khi vào màn chat.
+     * Runs Kerberos and E2EE handshake before entering the chat screen.
      */
     private void connectInBackground(String username, char[] password) {
         new SwingWorker<Object[], Void>() {
@@ -128,42 +127,42 @@ public class ClientApp extends JFrame {
                 try {
                     log.info("Establishing secure session for user={}", username);
 
-                    // 1. Đồng bộ thời gian
-                    loginPanel.trace("Đồng bộ thời gian", "Lấy mốc thời gian mạng để chống replay trong cửa sổ 300 giây.",
+                    // 1. Synchronize time
+                    loginPanel.trace("Synchronize time", "Fetching network time to prevent replay within the 300-second window.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     NtpTimeClient.syncTime();
-                    loginPanel.trace("Thời gian hợp lệ", "Timestamp cho authenticator sẽ dùng đồng hồ đã đồng bộ.",
+                    loginPanel.trace("Time validated", "The authenticator timestamp will use the synchronized clock.",
                             ActivityFlowPanel.Tone.SUCCESS);
 
-                    // 2. Lấy vé Kerberos
+                    // 2. Request Kerberos tickets
                     KerberosClient kerberosClient = new KerberosClient();
-                    loginPanel.trace("Xin TGT", "Client ký TGT request bằng chứng chỉ X.509 và gửi tới AS.",
+                    loginPanel.trace("Request TGT", "The client signs the TGT request with the X.509 certificate and sends it to AS.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     kerberosClient.requestTgt(username, password);
-                    loginPanel.trace("TGT đã cấp", "AS đã trả TGT và K_A_TGS; cache cục bộ được mã hóa bằng Argon2id.",
+                    loginPanel.trace("TGT issued", "AS returned the TGT and K_A_TGS; the local cache is encrypted with Argon2id.",
                             ActivityFlowPanel.Tone.SUCCESS);
-                    loginPanel.trace("Xin ST", "TGS kiểm tra TGT, authenticator và Proof-of-Possession để cấp vé chat.",
+                    loginPanel.trace("Request ST", "TGS checks the TGT, authenticator, and Proof-of-Possession before issuing the chat ticket.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     kerberosClient.requestSt(username, password, ServerConfig.CHAT_HOST);
-                    loginPanel.trace("ST đã cấp", "Service Ticket chứa Control Vector CHAT_SERVICE và khóa K_A_ChatAuth.",
+                    loginPanel.trace("ST issued", "The Service Ticket contains Control Vector CHAT_SERVICE and key K_A_ChatAuth.",
                             ActivityFlowPanel.Tone.SUCCESS);
 
-                    // 3. Handshake E2EE thực sự với Chat Server (dùng ST)
+                    // 3. Run E2EE handshake with Chat Server using ST
                     E2eeCryptoService e2eeService = new E2eeCryptoService();
                     e2eeService.setActivitySink((title, body, tone) ->
                             loginPanel.trace(title, body, ActivityFlowPanel.Tone.valueOf(tone.name())));
                     e2eeService.performHandshake(username, password);
 
-                    // 4. Mở khóa CSDL nội bộ bằng Argon2id-derived key
-                    loginPanel.trace("Mở CSDL cục bộ", "Lịch sử chat được giải khóa bằng key dẫn xuất Argon2id.",
+                    // 4. Unlock local database with an Argon2id-derived key
+                    loginPanel.trace("Unlock local database", "Chat history is unlocked with an Argon2id-derived key.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     LocalDatabase localDb = new LocalDatabase(username);
                     localDb.unlockDatabase(password);
                     if (!localDb.isUnlocked()) {
                         throw new vn.edu.hcmus.securechat.common.exception.KeyDerivationException(
-                                "Không mở khóa được lịch sử chat cục bộ");
+                                "Unable to unlock local chat history");
                     }
-                    loginPanel.trace("Phiên sẵn sàng", "Đăng nhập hoàn tất; nội dung tin nhắn sẽ dùng Double Ratchet.",
+                    loginPanel.trace("Session ready", "Sign-in is complete; message content will use Double Ratchet.",
                             ActivityFlowPanel.Tone.SUCCESS);
 
                     return new Object[]{e2eeService, localDb};
@@ -180,26 +179,26 @@ public class ClientApp extends JFrame {
                     if (result != null && result[0] != null) {
                         showChat(username, (E2eeCryptoService) result[0], (vn.edu.hcmus.securechat.client.db.LocalDatabase) result[1]);
                     } else {
-                        loginPanel.showAuthError("Kết nối thất bại. Vui lòng kiểm tra máy chủ và thử lại.");
+                        loginPanel.showAuthError("Connection failed. Please check the server and try again.");
                     }
                 } catch (Exception e) {
                     log.error("Connection failed", e);
                     Throwable cause = e.getCause() != null ? e.getCause() : e;
                     String message = cause.getMessage();
                     
-                    String friendlyMessage = "Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin tài khoản hoặc kết nối mạng.";
+                    String friendlyMessage = "Sign-in failed. Please check your account information or network connection.";
                     if (message != null) {
                         String msgLower = message.toLowerCase();
-                        if (msgLower.contains("incorrect password") || msgLower.contains("mật khẩu không đúng") || msgLower.contains("invalid key") || msgLower.contains("decrypt") || msgLower.contains("argon2") || msgLower.contains("badpadding")) {
-                            friendlyMessage = "Mật khẩu không đúng. Vui lòng thử lại.";
-                        } else if (msgLower.contains("user not found") || msgLower.contains("không tìm thấy") || msgLower.contains("principal") || msgLower.contains("does not exist")) {
-                            friendlyMessage = "Tài khoản không tồn tại. Vui lòng kiểm tra lại.";
-                        } else if (msgLower.contains("refused") || msgLower.contains("connect") || msgLower.contains("timeout") || msgLower.contains("máy chủ")) {
-                            friendlyMessage = "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối mạng của bạn.";
-                        } else if (msgLower.contains("expired") || msgLower.contains("thời gian") || msgLower.contains("clock skew")) {
-                            friendlyMessage = "Thời gian trên máy tính không khớp hoặc yêu cầu hết hạn. Vui lòng thử lại.";
-                        } else if (msgLower.contains("lịch sử chat") || msgLower.contains("database")) {
-                            friendlyMessage = "Không thể mở lịch sử trò chuyện. Vui lòng kiểm tra mật khẩu.";
+                        if (msgLower.contains("incorrect password") || msgLower.contains("invalid key") || msgLower.contains("decrypt") || msgLower.contains("argon2") || msgLower.contains("badpadding")) {
+                            friendlyMessage = "Incorrect password. Please try again.";
+                        } else if (msgLower.contains("user not found") || msgLower.contains("principal") || msgLower.contains("does not exist")) {
+                            friendlyMessage = "Account does not exist. Please check again.";
+                        } else if (msgLower.contains("refused") || msgLower.contains("connect") || msgLower.contains("timeout") || msgLower.contains("server")) {
+                            friendlyMessage = "Unable to connect to the server. Please check your network connection.";
+                        } else if (msgLower.contains("expired") || msgLower.contains("time") || msgLower.contains("clock skew")) {
+                            friendlyMessage = "Your computer time does not match or the request expired. Please try again.";
+                        } else if (msgLower.contains("chat history") || msgLower.contains("database")) {
+                            friendlyMessage = "Unable to open chat history. Please check your password.";
                         }
                     }
                     loginPanel.showAuthError(friendlyMessage);
@@ -239,7 +238,7 @@ public class ClientApp extends JFrame {
     }
 
     private void showError(String message) {
-        JOptionPane.showMessageDialog(this, message, "SecureChat — Lỗi", JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(this, message, "SecureChat - Error", JOptionPane.ERROR_MESSAGE);
     }
 
     public static void main(String[] args) {

@@ -50,6 +50,18 @@ public class GroupMessageDto {
     @JsonProperty("nonce")
     private String nonce;
 
+    @JsonProperty("controlType")
+    private String controlType;
+
+    @JsonProperty("memberIds")
+    private List<String> memberIds;
+
+    @JsonProperty("leaderId")
+    private String leaderId;
+
+    @JsonProperty("removedMemberId")
+    private String removedMemberId;
+
     public GroupMessageDto() {}
 
     public GroupMessageDto(String groupId, String groupName, String senderId,
@@ -84,4 +96,16 @@ public class GroupMessageDto {
 
     public String getNonce() { return nonce; }
     public void setNonce(String nonce) { this.nonce = nonce; }
+
+    public String getControlType() { return controlType; }
+    public void setControlType(String controlType) { this.controlType = controlType; }
+
+    public List<String> getMemberIds() { return memberIds; }
+    public void setMemberIds(List<String> memberIds) { this.memberIds = memberIds; }
+
+    public String getLeaderId() { return leaderId; }
+    public void setLeaderId(String leaderId) { this.leaderId = leaderId; }
+
+    public String getRemovedMemberId() { return removedMemberId; }
+    public void setRemovedMemberId(String removedMemberId) { this.removedMemberId = removedMemberId; }
 }

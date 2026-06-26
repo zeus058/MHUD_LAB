@@ -327,12 +327,12 @@ public class RegisterPanel extends JPanel {
         statusLabel.setText(" ");
         try {
             if (username.isEmpty() || password.length == 0) {
-                statusLabel.setText("Vui lòng điền đầy đủ thông tin.");
+                statusLabel.setText("Please fill in all required information.");
                 Arrays.fill(password, '\0');
                 return;
             }
             if (!Arrays.equals(password, confirm)) {
-                statusLabel.setText("Mật khẩu xác nhận không khớp.");
+                statusLabel.setText("Password confirmation does not match.");
                 Arrays.fill(password, '\0');
                 return;
             }
@@ -340,9 +340,9 @@ public class RegisterPanel extends JPanel {
                     || java.nio.file.Files.isRegularFile(
                             java.nio.file.Path.of("data/client", "keystore_" + username + ".p12"))) {
                 statusLabel.setForeground(UIConstants.SECURE_TEAL);
-                statusLabel.setText("Tài khoản “" + username + "” đã tồn tại. Vui lòng đăng nhập!");
-                trace("Chứng chỉ đã tồn tại", "@" + username
-                        + " đã có keystore cục bộ nên có thể chuyển sang đăng nhập.", ActivityFlowPanel.Tone.INFO);
+                statusLabel.setText("Account \"" + username + "\" already exists. Please sign in.");
+                trace("Certificate already exists", "@" + username
+                        + " already has a local keystore, so you can switch to sign-in.", ActivityFlowPanel.Tone.INFO);
                 Arrays.fill(password, '\0');
                 return;
             }
@@ -352,36 +352,36 @@ public class RegisterPanel extends JPanel {
 
         setFormEnabled(false);
         statusLabel.setForeground(UIConstants.SECURE_TEAL);
-        statusLabel.setText("Đang đăng ký tài khoản của bạn...");
-        trace("Bắt đầu đăng ký", "Đang sinh khóa, tạo CSR và gửi tới CA Server.", ActivityFlowPanel.Tone.ACTIVE);
+        statusLabel.setText("Registering your account...");
+        trace("Starting registration", "Generating keys, creating a CSR, and sending it to the CA Server.", ActivityFlowPanel.Tone.ACTIVE);
 
         new SwingWorker<Boolean, Void>() {
             @Override
             protected Boolean doInBackground() {
                 try {
-                    trace("Sinh identity keypair", "Private key được tạo cục bộ và không gửi ra mạng.",
+                    trace("Generate identity keypair", "The private key is created locally and never sent over the network.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     PkiManager.generateKeyPair(username);
                     
-                    trace("Ký CSR", "CSR được ký bằng private key để CA kiểm tra Proof-of-Possession.",
+                    trace("Sign CSR", "The CSR is signed with the private key so the CA can verify Proof-of-Possession.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     CertificateSigningRequest req = PkiManager.createCsrPayload("CN=" + username + ", O=Mock");
                     
                     PacketFrame frame = new PacketFrame(PacketFrame.TYPE_CSR_REQUEST, (byte)1, (short)0, JsonSerializer.toBytes(req));
                     
-                    trace("Gửi tới CA", "PacketFrame TYPE_CSR_REQUEST được gửi qua socket length-prefix.",
+                    trace("Send to CA", "PacketFrame TYPE_CSR_REQUEST is sent over the length-prefixed socket.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     PacketFrame response = SocketClient.sendRequest(vn.edu.hcmus.securechat.common.config.ServerConfig.CA_HOST, vn.edu.hcmus.securechat.common.config.ServerConfig.CA_PORT, frame);
                     
                     if (response.getType() == PacketFrame.TYPE_CERT_RESPONSE) {
                         CertificateResponse certResp = JsonSerializer.fromBytes(response.getPayload(), CertificateResponse.class);
-                        trace("Lưu keystore", "Chứng chỉ X.509 và chain CA được ghi vào PKCS#12 của @"
+                        trace("Save keystore", "The X.509 certificate and CA chain are written to the PKCS#12 keystore for @"
                                 + username + ".", ActivityFlowPanel.Tone.ACTIVE);
                         PkiManager.saveKeyStore(username, password, certResp.getCertificate(), certResp.getCaChain());
                         return true;
                     }
                 } catch (Exception e) {
-                    log.error("Lỗi đăng ký PKI", e);
+                    log.error("PKI registration failed", e);
                 }
                 return false;
             }
@@ -390,22 +390,22 @@ public class RegisterPanel extends JPanel {
             protected void done() {
                 try {
                     if (Boolean.TRUE.equals(get())) {
-                        trace("Đăng ký hoàn tất", "@" + username
-                                + " đã có chứng chỉ để xin TGT/ST trong bước đăng nhập.", ActivityFlowPanel.Tone.SUCCESS);
+                        trace("Registration complete", "@" + username
+                                + " now has a certificate for requesting TGT/ST during sign-in.", ActivityFlowPanel.Tone.SUCCESS);
                         listener.onRegisterSuccess(username);
                     } else {
                         statusLabel.setForeground(UIConstants.SIGNAL_RED);
-                        statusLabel.setText("Đăng ký thất bại. Vui lòng thử lại.");
-                        trace("Đăng ký thất bại", "CA không trả về certificate response hợp lệ.",
+                        statusLabel.setText("Registration failed. Please try again.");
+                        trace("Registration failed", "The CA did not return a valid certificate response.",
                                 ActivityFlowPanel.Tone.ERROR);
-                        listener.onAuthError("Đăng ký thất bại. Vui lòng thử lại.");
+                        listener.onAuthError("Registration failed. Please try again.");
                     }
                 } catch (Exception e) {
                     log.error("Register failed", e);
                     statusLabel.setForeground(UIConstants.SIGNAL_RED);
-                    statusLabel.setText("Đăng ký thất bại. Vui lòng thử lại.");
-                    trace("Đăng ký thất bại", e.getMessage(), ActivityFlowPanel.Tone.ERROR);
-                    listener.onAuthError("Đăng ký thất bại. Vui lòng thử lại.");
+                    statusLabel.setText("Registration failed. Please try again.");
+                    trace("Registration failed", e.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                    listener.onAuthError("Registration failed. Please try again.");
                 } finally {
                     Arrays.fill(password, '\0');
                     passwordField.setText("");

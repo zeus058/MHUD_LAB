@@ -27,7 +27,7 @@ import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Client thực hiện luồng Kerberos V5 (Mock theo phương án A).
+ * Client executes the Kerberos V5 flow.
  */
 public class KerberosClient {
     private static final Logger log = LoggerFactory.getLogger(KerberosClient.class);
@@ -38,21 +38,21 @@ public class KerberosClient {
     private byte[] freshKaTgs;
 
     /**
-     * Yêu cầu TGT từ Authentication Server bằng PKINIT (X.509 + RSA).
+     * Requests a TGT from the Authentication Server using PKINIT (X.509 + RSA).
      */
     public void requestTgt(String username, char[] password) throws Exception {
-        log.info("Bắt đầu xin vé TGT từ Authentication Server cho user: {}", username);
+        log.info("Requesting TGT from Authentication Server for user={}", username);
         try {
-            // 1. Tải KeyStore
+            // 1. Load KeyStore
             PkiManager.loadKeyStore(username, password);
         } catch (Exception e) {
             throw new Exception(
-                    "Không tìm thấy chứng chỉ người dùng hoặc mật khẩu sai. Vui lòng đăng ký trước hoặc kiểm tra lại thông tin.",
+                    "User certificate was not found or the password is incorrect. Please register first or check your credentials.",
                     e);
         }
 
         try {
-            // 2. Tạo TgtRequest
+            // 2. Create TgtRequest
             TgtRequest req = new TgtRequest();
             req.setClientId(username);
             req.setTargetTgs(ServerConfig.TGS_HOST);
@@ -65,29 +65,29 @@ public class KerberosClient {
             long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
             req.setTimestamp(timestamp);
 
-            // Ký Proof-of-Possession (PoP) cho TGT
+            // Sign Proof-of-Possession (PoP) for TGT
             String dataToSign = username + "|" + ServerConfig.TGS_HOST + "|" + nonce + "|" + timestamp;
             java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
             sig.initSign(PkiManager.getPrivateKey());
             sig.update(dataToSign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             req.setSignature(Base64.getEncoder().encodeToString(sig.sign()));
 
-            // 3. Gửi qua mạng tới AS Server
+            // 3. Send to AS Server
             PacketFrame frame = new PacketFrame(PacketFrame.TYPE_TGT_REQUEST, (byte) 1, (short) 0,
                     JsonSerializer.toBytes(req));
             PacketFrame response = SocketClient.sendRequest(ServerConfig.AS_HOST, ServerConfig.AS_PORT, frame);
 
             if (response.getType() == PacketFrame.TYPE_TGT_RESPONSE) {
-                log.info("Nhận được TGT_RESPONSE. Thực hiện giải mã Hybrid...");
+                log.info("Received TGT_RESPONSE. Decrypting Hybrid payload...");
                 TgtResponse tgtResp = JsonSerializer.fromBytes(response.getPayload(), TgtResponse.class);
 
-                // 4. Giải mã response inner bằng Private Key của client
+                // 4. Decrypt inner response with the client private key
                 byte[] cipherBytes = Base64.getDecoder().decode(tgtResp.getResponse());
                 byte[] innerBytes = HybridEncryption.decrypt(PkiManager.getPrivateKey(), cipherBytes);
                 TgtResponseInner inner = JsonSerializer.fromBytes(innerBytes, TgtResponseInner.class);
 
                 if (!nonce.equals(inner.getNonce())) {
-                    throw new Exception("Nonce trong TGT_RESPONSE không khớp. Vui lòng thử lại.");
+                    throw new Exception("Nonce in TGT_RESPONSE does not match. Please try again.");
                 }
 
                 byte[] sessionKeyBytes = Base64.getDecoder().decode(inner.getSessionKey());
@@ -97,7 +97,7 @@ public class KerberosClient {
                     Arrays.fill(sessionKeyBytes, (byte) 0);
                 }
 
-                // 5. Lưu vé (gồm chuỗi TGT mã hoá và K_A_TGS) vào đĩa
+                // 5. Save the ticket and K_A_TGS to disk
                 String cacheData = tgtResp.getTgt() + "|||" + inner.getSessionKey()
                         + "|||" + nullToEmpty(inner.getTgtId());
                 byte[] cacheBytes = cacheData.getBytes(StandardCharsets.UTF_8);
@@ -107,26 +107,26 @@ public class KerberosClient {
                     Arrays.fill(cacheBytes, (byte) 0);
                 }
 
-                log.info("Xác thực Kerberos AS thành công! Đã lưu TGT và SessionKey K_A_TGS.");
+                log.info("Kerberos AS authentication succeeded. Saved TGT and session key K_A_TGS.");
                 return;
             } else if (response.getType() == PacketFrame.TYPE_ERROR) {
                 ErrorResponse errorResp = JsonSerializer.fromBytes(response.getPayload(), ErrorResponse.class);
                 log.error("Server error: code={}, message={}", errorResp.getErrorCode(), errorResp.getMessage());
-                throw new Exception("Đăng nhập thất bại: " + errorResp.getMessage());
+                throw new Exception("Sign-in failed: " + errorResp.getMessage());
             } else {
-                throw new Exception("Server trả về gói tin không hợp lệ thay vì TGT_RESPONSE.");
+                throw new Exception("Server returned an invalid packet instead of TGT_RESPONSE.");
             }
         } catch (Exception e) {
-            log.error("Lỗi khi xin TGT", e);
-            throw new Exception("Đăng nhập thất bại khi xin TGT: " + e.getMessage(), e);
+            log.error("Failed to request TGT", e);
+            throw new Exception("Sign-in failed while requesting TGT: " + e.getMessage(), e);
         }
     }
 
     /**
-     * Yêu cầu Service Ticket (ST) từ Ticket Granting Server.
+     * Requests a Service Ticket (ST) from the Ticket Granting Server.
      */
     public void requestSt(String username, char[] password, String targetService) throws Exception {
-        log.info("Bắt đầu xin vé ST cho dịch vụ: {}", targetService);
+        log.info("Requesting ST for service={}", targetService);
         byte[] cachedData = null;
         byte[] kaTgsBytes = null;
         byte[] authBytes = null;
@@ -135,25 +135,25 @@ public class KerberosClient {
         byte[] cipherBytes = null;
         byte[] innerBytes = null;
         try {
-            // 1. Lấy TGT và K_A_TGS từ cache
+            // 1. Load TGT and K_A_TGS from cache
             String tgtBase64;
             String tgtId;
             if (hasFreshTgt(username)) {
                 tgtBase64 = freshTgtBase64;
                 tgtId = freshTgtId;
                 kaTgsBytes = Arrays.copyOf(freshKaTgs, freshKaTgs.length);
-                log.info("Dùng TGT vừa nhận trong RAM để xin ST, tránh đọc nhầm cache cũ.");
+                log.info("Using the fresh in-memory TGT to request ST and avoid stale cache data.");
             } else {
                 cachedData = TicketCache.getTicket(username, "TGT", password);
                 if (cachedData == null) {
                     TicketCache.clearCache(username);
-                    throw new Exception("Không đọc được TGT từ cache. Vui lòng đăng nhập lại.");
+                    throw new Exception("Unable to read TGT from cache. Please sign in again.");
                 }
                 String cacheString = new String(cachedData, StandardCharsets.UTF_8);
                 String[] parts = cacheString.split("\\|\\|\\|");
                 if (parts.length < 2) {
                     TicketCache.clearCache(username);
-                    throw new Exception("Dữ liệu TGT cache bị hỏng. Vui lòng đăng nhập lại.");
+                    throw new Exception("TGT cache data is corrupted. Please sign in again.");
                 }
                 tgtBase64 = parts[0];
                 String kaTgsBase64 = parts[1];
@@ -161,7 +161,7 @@ public class KerberosClient {
                 kaTgsBytes = Base64.getDecoder().decode(kaTgsBase64);
             }
 
-            // 2. Tạo Authenticator (timestamp tính bằng SECONDS, khớp với
+            // 2. Create Authenticator (timestamp uses seconds, matching
             // ReplayDefenseService)
             long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
             String authNonce = randomNonceBase64();
@@ -177,10 +177,10 @@ public class KerberosClient {
             encryptedAuth = AesGcmCipher.encrypt(kaTgsBytes, authBytes);
             String authBase64 = Base64.getEncoder().encodeToString(encryptedAuth);
 
-            // 3. Tạo ST_REQUEST
+            // 3. Create ST_REQUEST
             StRequest req = new StRequest(tgtBase64, authBase64, targetService);
 
-            // Ký Proof-of-Possession (PoP) cho ST
+            // Sign Proof-of-Possession (PoP) for ST
             String dataToSignSt = tgtBase64 + "|" + authBase64 + "|" + targetService;
             java.security.Signature sigSt = java.security.Signature.getInstance("SHA256withRSA");
             sigSt.initSign(PkiManager.getPrivateKey());
@@ -190,23 +190,23 @@ public class KerberosClient {
             reqBytes = JsonSerializer.toBytes(req);
             PacketFrame frame = new PacketFrame(PacketFrame.TYPE_ST_REQUEST, (byte) 1, (short) 0, reqBytes);
 
-            log.info("Gửi ST_REQUEST lên TGS...");
+            log.info("Sending ST_REQUEST to TGS...");
             PacketFrame response = SocketClient.sendRequest(ServerConfig.TGS_HOST, ServerConfig.TGS_PORT, frame);
 
             if (response.getType() == PacketFrame.TYPE_ST_RESPONSE) {
-                log.info("Nhận được ST_RESPONSE. Đang giải mã...");
+                log.info("Received ST_RESPONSE. Decrypting...");
                 StResponse stResp = JsonSerializer.fromBytes(response.getPayload(), StResponse.class);
 
-                // Giải mã response inner
+                // Decrypt inner response
                 cipherBytes = Base64.getDecoder().decode(stResp.getResponse());
                 innerBytes = AesGcmCipher.decrypt(kaTgsBytes, cipherBytes);
                 StResponseInner inner = JsonSerializer.fromBytes(innerBytes, StResponseInner.class);
 
                 if (!authNonce.equals(inner.getNonce())) {
-                    throw new Exception("Nonce trong ST_RESPONSE không khớp.");
+                    throw new Exception("Nonce in ST_RESPONSE does not match.");
                 }
 
-                // Lưu ST và K_A_Chat
+                // Save ST and K_A_Chat
                 String stCacheData = stResp.getSt() + "|||" + inner.getSessionKey()
                         + "|||" + nullToEmpty(inner.getStId());
                 byte[] stCacheBytes = stCacheData.getBytes(StandardCharsets.UTF_8);
@@ -215,7 +215,7 @@ public class KerberosClient {
                 } finally {
                     Arrays.fill(stCacheBytes, (byte) 0);
                 }
-                log.info("Xác thực Kerberos TGS thành công! Đã lưu ST và SessionKey K_A_Chat.");
+                log.info("Kerberos TGS authentication succeeded. Saved ST and session key K_A_Chat.");
                 clearFreshTgt();
                 return;
             } else if (response.getType() == PacketFrame.TYPE_ERROR) {
@@ -224,13 +224,13 @@ public class KerberosClient {
                 if ("INVALID_TICKET".equals(errorResp.getErrorCode()) || "CRYPTO_ERROR".equals(errorResp.getErrorCode())) {
                     TicketCache.clearCache(username);
                 }
-                throw new Exception("Đăng nhập thất bại: " + errorResp.getMessage());
+                throw new Exception("Sign-in failed: " + errorResp.getMessage());
             } else {
-                throw new Exception("Server trả về gói tin không hợp lệ thay vì ST_RESPONSE.");
+                throw new Exception("Server returned an invalid packet instead of ST_RESPONSE.");
             }
         } catch (Exception e) {
-            log.error("Lỗi khi xin ST", e);
-            throw new Exception("Đăng nhập thất bại khi xin ST: " + e.getMessage(), e);
+            log.error("Failed to request ST", e);
+            throw new Exception("Sign-in failed while requesting ST: " + e.getMessage(), e);
         } finally {
             if (cachedData != null) Arrays.fill(cachedData, (byte) 0);
             if (kaTgsBytes != null) Arrays.fill(kaTgsBytes, (byte) 0);

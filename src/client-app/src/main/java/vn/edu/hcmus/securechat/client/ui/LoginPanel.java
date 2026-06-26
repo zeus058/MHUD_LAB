@@ -304,13 +304,13 @@ public class LoginPanel extends JPanel {
         statusLabel.setText(" ");
         if (username.isEmpty() || password.length == 0) {
             statusLabel.setForeground(UIConstants.SIGNAL_RED);
-            statusLabel.setText("Vui lòng nhập đầy đủ email và mật khẩu.");
+            statusLabel.setText("Please enter both email and password.");
             Arrays.fill(password, '\0');
             return;
         }
 
-        trace("Bắt đầu Kerberos", "Đang mở identity keystore của @" + username
-                + " và chuẩn bị ký request TGT/ST.", ActivityFlowPanel.Tone.ACTIVE);
+        trace("Starting Kerberos", "Opening the identity keystore for @" + username
+                + " and preparing to sign TGT/ST requests.", ActivityFlowPanel.Tone.ACTIVE);
         listener.onLoginSuccess(username, password.clone());
         Arrays.fill(password, '\0');
     }
@@ -319,9 +319,9 @@ public class LoginPanel extends JPanel {
         setFormEnabled(!connecting);
         if (connecting) {
             statusLabel.setForeground(UIConstants.SECURE_TEAL);
-            statusLabel.setText("Đang kết nối an toàn...");
-            loginButton.setText("Đang kết nối...");
-            trace("Đang xử lý phiên", "NTP, TGT, ST, Chat handshake và Pre-Key upload sẽ chạy tuần tự.",
+            statusLabel.setText("Connecting securely...");
+            loginButton.setText("Connecting...");
+            trace("Processing session", "NTP, TGT, ST, Chat handshake, and Pre-Key upload will run in sequence.",
                     ActivityFlowPanel.Tone.ACTIVE);
         } else {
             loginButton.setText("Sign In");
@@ -332,7 +332,7 @@ public class LoginPanel extends JPanel {
     public void showAuthError(String message) {
         statusLabel.setForeground(UIConstants.SIGNAL_RED);
         statusLabel.setText(message);
-        trace("Đăng nhập bị từ chối", message, ActivityFlowPanel.Tone.ERROR);
+        trace("Sign-in rejected", message, ActivityFlowPanel.Tone.ERROR);
         setFormEnabled(true);
         loginButton.setText("Sign In");
     }
