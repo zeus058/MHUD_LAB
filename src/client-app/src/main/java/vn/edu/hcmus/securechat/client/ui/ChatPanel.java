@@ -17,6 +17,9 @@ import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -37,6 +40,7 @@ import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -51,6 +55,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import vn.edu.hcmus.securechat.client.crypto.E2eeCryptoService;
 import vn.edu.hcmus.securechat.client.network.FileTransferManager;
@@ -762,8 +767,8 @@ public class ChatPanel extends JPanel {
         this.attachBtn.setFocusPainted(false);
         this.attachBtn.setEnabled(false);
         this.attachBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        // Wire attach button: mở hộp thoại chọn file
-        this.attachBtn.addActionListener(e -> openFileChooser());
+        // Wire attach button: choose file or folder to send
+        this.attachBtn.addActionListener(e -> chooseAttachmentType());
         pill.add(this.attachBtn, BorderLayout.WEST);
 
         messageInput = new EmbeddedPlaceholderField("Type a message");
@@ -948,7 +953,22 @@ public class ChatPanel extends JPanel {
         if (hintWrap != null) {
             hintWrap.setVisible(true);
         }
-        ConversationItem display = item == null ? ConversationItem.manual(selectedPeer) : item;
+        ConversationItem display = item;
+        if (display == null && selectedPeer != null && selectedPeer.startsWith("group-") && groupManager != null) {
+            GroupManager.GroupInfo group = groupManager.getGroup(selectedPeer);
+            if (group != null) {
+                display = ConversationItem.manual(selectedPeer);
+                display.displayName = group.groupName();
+                display.online = group.memberIds() != null && onlineMemberCount(group) >= 2;
+                display.isGroup = true;
+                display.groupOnlineCount = onlineMemberCount(group);
+                display.groupMemberCount = group.memberIds() == null ? 0 : group.memberIds().size();
+                display.leaderId = group.leaderId();
+            }
+        }
+        if (display == null) {
+            display = ConversationItem.manual(selectedPeer);
+        }
         peerTitle.setText(display.displayName());
         peerStatus.setText(display.statusText());
         if (display.online) {
@@ -971,7 +991,21 @@ public class ChatPanel extends JPanel {
                 boolean outgoing = msg.getSenderId().equals(username);
                 String time = Instant.ofEpochSecond(msg.getSentAt())
                         .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
-                addMessageBubbleInternal(msg.getContent(), outgoing, time, selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
+                String content = msg.getContent();
+                if (isFileMessage(content)) {
+                    String visibleContent = extractVisibleMessage(content);
+                                String fileName = extractFileName(visibleContent);
+                    String storedPath = extractFilePath(content);
+                    boolean isFolder = extractIsFolder(content);
+                    if (fileName == null || fileName.isBlank()) {
+                        addMessageBubbleInternal(content, outgoing, time, selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
+                    } else {
+                        java.io.File storedFile = storedPath != null ? new java.io.File(storedPath) : null;
+                        addFileMessageBubble(storedFile, fileName, outgoing, time, selectedPeer.startsWith("group-") ? msg.getSenderId() : null, isFolder);
+                    }
+                } else {
+                    addMessageBubbleInternal(content, outgoing, time, selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
+                }
                 this.messageCount++;
             }
         }
@@ -1301,25 +1335,72 @@ public class ChatPanel extends JPanel {
     // =========================================================================
 
     /** Mở hộp thoại chọn file để gửi E2EE cho peer đang chat. */
-    private void openFileChooser() {
+    private void chooseAttachmentType() {
+        if (selectedPeer == null) return;
+        String targetName = selectedPeer;
+        if (selectedPeer.startsWith("group-") && groupManager != null) {
+            GroupManager.GroupInfo group = groupManager.getGroup(selectedPeer);
+            if (group != null && group.groupName() != null && !group.groupName().isBlank()) {
+                targetName = group.groupName();
+            }
+        }
+        Object[] options = {"Send File", "Send Folder", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(this,
+                "Choose what to send to " + targetName + ".",
+                "Attach",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]);
+        if (choice == 0) {
+            openFileChooser(false);
+        } else if (choice == 1) {
+            openFileChooser(true);
+        }
+    }
+
+    private void openFileChooser(boolean folderOnly) {
         if (selectedPeer == null) return;
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
-        chooser.setDialogTitle("Choose a file to send to " + selectedPeer);
+        chooser.setDialogTitle((folderOnly ? "Choose a folder" : "Choose a file") + " to send to " + selectedPeer);
         chooser.setMultiSelectionEnabled(false);
+        chooser.setFileSelectionMode(folderOnly ? javax.swing.JFileChooser.DIRECTORIES_ONLY : javax.swing.JFileChooser.FILES_ONLY);
         int result = chooser.showOpenDialog(this);
         if (result != javax.swing.JFileChooser.APPROVE_OPTION) return;
 
         java.io.File selectedFile = chooser.getSelectedFile();
-        String peer = selectedPeer;
+        final String peer = selectedPeer;
+        final String time = java.time.LocalTime.now().format(TIME_FMT);
 
-        // Hiển thị tin nhắn tạm thời
-        String time = java.time.LocalTime.now().format(TIME_FMT);
-        addMessageBubble("File: " + selectedFile.getName() + " (sending...)", true, time);
+        final java.io.File fileToSend;
+        final boolean isFolder;
+        if (folderOnly) {
+            java.io.File zipped;
+            try {
+                zipped = zipFolderToTemp(selectedFile);
+                if (zipped == null) {
+                    flow("Folder send failed", "Unable to compress selected folder.", ActivityFlowPanel.Tone.ERROR);
+                    return;
+                }
+            } catch (Exception ex) {
+                log.error("Failed to zip folder", ex);
+                flow("Folder send failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
+                return;
+            }
+            fileToSend = zipped;
+            isFolder = true;
+        } else {
+            fileToSend = selectedFile;
+            isFolder = false;
+        }
+
+        addFileMessageBubble(fileToSend, selectedFile.getName(), true, time, null, isFolder);
 
         new SwingWorker<Boolean, Void>() {
             @Override
             protected Boolean doInBackground() throws Exception {
-                fileTransferManager.sendFile(selectedFile, peer);
+                fileTransferManager.sendFile(fileToSend, peer);
                 return true;
             }
 
@@ -1330,12 +1411,10 @@ public class ChatPanel extends JPanel {
                     flow("File sent",
                             "\"" + selectedFile.getName() + "\" -> " + peer,
                             ActivityFlowPanel.Tone.SUCCESS);
-                    
                     if (localDb != null) {
-                        localDb.saveMessage(username, peer, username, "File: " + selectedFile.getName() + " (sent)", Instant.now().getEpochSecond());
-                    }
-                    if (peer.equals(selectedPeer)) {
-                        loadChatHistory();
+                        localDb.saveMessage(username, peer, username,
+                                buildFileMessageContent("File: " + selectedFile.getName() + " (sent)", fileToSend, isFolder),
+                                Instant.now().getEpochSecond());
                     }
                 } catch (Exception ex) {
                     log.error("File send failed", ex);
@@ -1345,25 +1424,130 @@ public class ChatPanel extends JPanel {
         }.execute();
     }
 
+    private java.io.File zipFolderToTemp(java.io.File folder) throws IOException {
+        if (folder == null || !folder.exists() || !folder.isDirectory()) {
+            throw new IOException("Invalid folder selected: " + (folder == null ? "null" : folder));
+        }
+        java.io.File tempDir = new java.io.File(System.getProperty("java.io.tmpdir"), "SecureChatOutgoing");
+        if (!tempDir.exists() && !tempDir.mkdirs()) {
+            throw new IOException("Cannot create temporary folder: " + tempDir.getAbsolutePath());
+        }
+        java.io.File zipFile = new java.io.File(tempDir, folder.getName() + ".zip");
+        try (FileOutputStream fos = new FileOutputStream(zipFile);
+             java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(fos)) {
+            zipFolder(folder, folder.getName(), zos);
+        }
+        return zipFile;
+    }
+
+    private void zipFolder(java.io.File folder, String basePath, java.util.zip.ZipOutputStream zos) throws IOException {
+        java.io.File[] entries = folder.listFiles();
+        if (entries == null) {
+            return;
+        }
+        for (java.io.File file : entries) {
+            if (file.isDirectory()) {
+                zipFolder(file, basePath + "/" + file.getName(), zos);
+            } else {
+                java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(basePath + "/" + file.getName());
+                zos.putNextEntry(entry);
+                try (FileInputStream fis = new FileInputStream(file)) {
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = fis.read(buffer)) != -1) {
+                        zos.write(buffer, 0, len);
+                    }
+                }
+                zos.closeEntry();
+            }
+        }
+    }
+
+    private static String buildFileMessageContent(String visible, java.io.File file, boolean isFolder) {
+        if (file == null) {
+            return visible;
+        }
+        try {
+            ObjectNode metadata = JsonSerializer.getMapper().createObjectNode();
+            metadata.put("path", file.getAbsolutePath());
+            metadata.put("isFolder", isFolder);
+            return visible + "|||" + JsonSerializer.getMapper().writeValueAsString(metadata);
+        } catch (Exception ex) {
+            return visible;
+        }
+    }
+
+    private static String extractVisibleMessage(String content) {
+        if (content == null) {
+            return null;
+        }
+        int separator = content.indexOf("|||");
+        return separator >= 0 ? content.substring(0, separator).trim() : content.trim();
+    }
+
+    private static String extractFilePath(String content) {
+        if (content == null) {
+            return null;
+        }
+        int separator = content.indexOf("|||");
+        if (separator < 0) {
+            return null;
+        }
+        try {
+            String metadata = content.substring(separator + 3);
+            JsonNode node = JsonSerializer.getMapper().readTree(metadata);
+            if (node.has("path")) {
+                String path = node.get("path").asText(null);
+                return path == null || path.isBlank() ? null : path;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static boolean extractIsFolder(String content) {
+        if (content == null) {
+            return false;
+        }
+        int separator = content.indexOf("|||");
+        if (separator < 0) {
+            return false;
+        }
+        try {
+            String metadata = content.substring(separator + 3);
+            JsonNode node = JsonSerializer.getMapper().readTree(metadata);
+            return node.has("isFolder") && node.get("isFolder").asBoolean(false);
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     /**
      * Hiển thị thông báo nhận file xong (chạy trên EDT).
      */
     private void showFileReceivedNotification(java.io.File file, String fileName, String senderId, String groupId) {
         String peer = (groupId != null && !groupId.isEmpty()) ? groupId : senderId;
 
-        flow("File received", "\"" + fileName + "\" saved to " + file.getParent(),
+        flow("File received", "\"" + fileName + "\" is ready. Click Open to view it.",
                 ActivityFlowPanel.Tone.SUCCESS);
 
-        // Add a system message bubble.
         String time = java.time.LocalTime.now().format(TIME_FMT);
         
+        boolean receivedIsFolder = fileName != null && fileName.toLowerCase().endsWith(".zip");
+        String displayName = fileName;
+        if (receivedIsFolder && displayName != null && displayName.toLowerCase().endsWith(".zip")) {
+            displayName = displayName.substring(0, displayName.length() - 4);
+        }
+
         // Save to SQLite DB for persistence
         if (localDb != null) {
-            localDb.saveMessage(username, peer, senderId, "File: " + fileName + " (received - SHA-256 OK)", Instant.now().getEpochSecond());
+            localDb.saveMessage(username, peer, senderId,
+                    buildFileMessageContent("File: " + displayName + " (received - SHA-256 OK)", file, receivedIsFolder),
+                    Instant.now().getEpochSecond());
         }
 
         if (peer.equals(selectedPeer)) {
-            addMessageBubble("File: " + fileName + " (received - SHA-256 OK)", false, time, senderId);
+            addFileMessageBubble(file, displayName, false, time, senderId, receivedIsFolder);
         } else {
             ConversationItem item = findConversation(peer);
             if (item == null) {
@@ -1372,8 +1556,13 @@ public class ChatPanel extends JPanel {
                     String groupName = group != null ? group.groupName() : "New group";
                     item = ConversationItem.manual(groupId);
                     item.displayName = groupName;
-                    item.online = true;
+                    item.online = group != null && onlineMemberCount(group) >= 2;
                     item.isGroup = true;
+                    if (group != null) {
+                        item.groupOnlineCount = onlineMemberCount(group);
+                        item.groupMemberCount = group.memberIds() == null ? 0 : group.memberIds().size();
+                        item.leaderId = group.leaderId();
+                    }
                     addConversation(item);
                 } else {
                     item = ConversationItem.manual(senderId);
@@ -1384,18 +1573,7 @@ public class ChatPanel extends JPanel {
             userList.repaint();
         }
 
-        // Hỏi mở file không
-        int opt = javax.swing.JOptionPane.showConfirmDialog(this,
-                "Finished receiving \"" + fileName + "\".\nDo you want to open the destination folder?",
-                "File downloaded", javax.swing.JOptionPane.YES_NO_OPTION,
-                javax.swing.JOptionPane.INFORMATION_MESSAGE);
-        if (opt == javax.swing.JOptionPane.YES_OPTION) {
-            try {
-                java.awt.Desktop.getDesktop().open(file.getParentFile());
-            } catch (Exception ex) {
-                log.warn("Cannot open directory: {}", ex.getMessage());
-            }
-        }
+        // No automatic open: the user can click the Open button in the chat bubble.
     }
 
     // =========================================================================
@@ -2985,9 +3163,9 @@ public class ChatPanel extends JPanel {
 
     private boolean canSendToConversation(ConversationItem item) {
         if (item == null) {
-            return selectedPeer != null && !selectedPeer.startsWith("group-");
+            return selectedPeer != null;
         }
-        return !item.isGroup || item.online;
+        return true;
     }
 
     private void refreshComposerState(ConversationItem item) {
@@ -3146,6 +3324,192 @@ public class ChatPanel extends JPanel {
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, rowHeight));
         messageContainer.add(row);
         messageContainer.add(Box.createVerticalStrut(2));
+    }
+
+    /**
+     * Add a message bubble representing a received file with an Open button.
+     */
+    private void addFileMessageBubble(String fileName, boolean outgoing, String time, String senderId) {
+        addFileMessageBubble(null, fileName, outgoing, time, senderId, false);
+    }
+
+    private void addFileMessageBubble(java.io.File file, String fileName, boolean outgoing, String time, String senderId) {
+        addFileMessageBubble(file, fileName, outgoing, time, senderId, false);
+    }
+
+    private void addFileMessageBubble(java.io.File file, String fileName, boolean outgoing, String time, String senderId, boolean isFolder) {
+        if (this.messageCount == 0) {
+            messageContainer.removeAll();
+        }
+
+        JPanel row = new JPanel(new FlowLayout(
+                outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        if (!outgoing) {
+            AvatarBadge avatar = new AvatarBadge(senderId != null ? senderId : selectedPeer, Color.decode("#5B54F6"), UIConstants.SECURE_TEAL);
+            avatar.setPreferredSize(new Dimension(26, 26));
+            row.add(avatar);
+            row.add(Box.createHorizontalStrut(8));
+        }
+
+        JPanel bubbleAndMeta = new JPanel();
+        bubbleAndMeta.setLayout(new BoxLayout(bubbleAndMeta, BoxLayout.Y_AXIS));
+        bubbleAndMeta.setOpaque(false);
+
+        if (!outgoing && senderId != null && selectedPeer != null && selectedPeer.startsWith("group-")) {
+            JLabel senderLabel = new JLabel("@" + senderId);
+            senderLabel.setFont(UIConstants.FONT_SMALL.deriveFont(Font.BOLD, 11f));
+            senderLabel.setForeground(UIConstants.SECURE_TEAL);
+            senderLabel.setBorder(new EmptyBorder(0, 0, 2, 0));
+            senderLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            bubbleAndMeta.add(senderLabel);
+        }
+
+        // Build a custom bubble with file name and Open button
+        JPanel fileBubble = new JPanel(new BorderLayout(10, 6));
+        fileBubble.setOpaque(true);
+        fileBubble.setBackground(outgoing ? new Color(0, 161, 156, 60) : UIConstants.GLASS_CARD);
+        fileBubble.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(outgoing ? new Color(0, 161, 156, 140) : UIConstants.GLASS_BORDER),
+                new EmptyBorder(12, 12, 12, 12)));
+
+        JPanel fileInfo = new JPanel();
+        fileInfo.setOpaque(false);
+        fileInfo.setLayout(new BoxLayout(fileInfo, BoxLayout.Y_AXIS));
+
+        String headingText = outgoing ? (isFolder ? "Sent folder" : "Sent file") : (isFolder ? "Received folder" : "Received file");
+        JLabel heading = new JLabel(headingText);
+        heading.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 12f));
+        heading.setForeground(UIConstants.TEXT_SILVER);
+        heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        fileInfo.add(heading);
+
+        JLabel nameLbl = new JLabel(fileName + (isFolder ? " (folder)" : ""));
+        nameLbl.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 14f));
+        nameLbl.setForeground(UIConstants.TEXT_WHITE);
+        nameLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        nameLbl.setBorder(new EmptyBorder(6, 0, 0, 0));
+        fileInfo.add(nameLbl);
+
+        java.io.File resolvedFile = file;
+        if ((resolvedFile == null || !resolvedFile.exists()) && fileName != null && !fileName.isBlank()) {
+            resolvedFile = new java.io.File(System.getProperty("user.home"), "Downloads\\SecureChat\\" + fileName);
+        }
+        final java.io.File fileToOpen = resolvedFile;
+
+        String detailText;
+        if (fileToOpen != null && fileToOpen.exists()) {
+            detailText = formatFileSize(fileToOpen.length());
+        } else if (outgoing) {
+            detailText = "Sent file";
+        } else {
+            detailText = "Saved to Downloads/SecureChat";
+        }
+        JLabel detailLbl = new JLabel(detailText);
+        detailLbl.setFont(UIConstants.FONT_SMALL.deriveFont(11f));
+        detailLbl.setForeground(UIConstants.TEXT_MUTED);
+        detailLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        detailLbl.setBorder(new EmptyBorder(4, 0, 0, 0));
+        fileInfo.add(detailLbl);
+
+        fileBubble.add(fileInfo, BorderLayout.CENTER);
+
+        String typeLabel = isFolder ? "folder" : "file";
+        String buttonLabel = (fileToOpen != null && fileToOpen.exists()) ? "Open " + typeLabel : "Open folder";
+        JButton openBtn = new JButton(buttonLabel) {
+            @Override
+            public Dimension getPreferredSize() {
+                return new Dimension(98, 32);
+            }
+        };
+        openBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        openBtn.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 12f));
+        openBtn.setForeground(UIConstants.TEXT_WHITE);
+        openBtn.setBackground(UIConstants.SECURE_TEAL);
+        openBtn.setOpaque(true);
+        openBtn.setContentAreaFilled(true);
+        openBtn.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
+        openBtn.setFocusPainted(false);
+        openBtn.addActionListener(e -> {
+            if (fileToOpen != null && fileToOpen.exists()) {
+                try {
+                    java.awt.Desktop.getDesktop().open(fileToOpen);
+                    return;
+                } catch (Exception ex) {
+                    log.warn("Cannot open file: {}", ex.getMessage());
+                }
+            }
+            java.io.File downloadsFolder = new java.io.File(System.getProperty("user.home"), "Downloads\\SecureChat");
+            if (downloadsFolder.exists()) {
+                try {
+                    java.awt.Desktop.getDesktop().open(downloadsFolder);
+                } catch (Exception ex2) {
+                    log.warn("Cannot open downloads folder: {}", ex2.getMessage());
+                }
+            }
+        });
+
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        right.setOpaque(false);
+        right.add(openBtn);
+        fileBubble.add(right, BorderLayout.EAST);
+
+        bubbleAndMeta.add(fileBubble);
+
+        JPanel metaRow = new JPanel(new FlowLayout(outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
+        metaRow.setOpaque(false);
+        metaRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel timeLabel = UiStyles.mutedLabel(time);
+        timeLabel.setFont(UIConstants.FONT_MONO.deriveFont(9f));
+        timeLabel.setForeground(UIConstants.TEXT_MUTED);
+        metaRow.add(timeLabel);
+        bubbleAndMeta.add(metaRow);
+
+        row.add(bubbleAndMeta);
+        int rowHeight = row.getPreferredSize().height;
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, rowHeight));
+        messageContainer.add(row);
+        messageContainer.add(Box.createVerticalStrut(2));
+
+        this.messageCount++;
+        scrollMessagesToEnd();
+    }
+
+    private static boolean isFileMessage(String content) {
+        return content != null && content.startsWith("File: ");
+    }
+
+    private static String extractFileName(String content) {
+        if (content == null) {
+            return null;
+        }
+        String trimmed = content.trim();
+        if (!trimmed.startsWith("File: ")) {
+            return null;
+        }
+        String after = trimmed.substring(6);
+        int end = after.indexOf(" (");
+        if (end > 0) {
+            return after.substring(0, end).trim();
+        }
+        return after.trim();
+    }
+
+    private static String formatFileSize(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        double kb = bytes / 1024.0;
+        if (kb < 1024) {
+            return String.format("%.1f KB", kb);
+        }
+        double mb = kb / 1024.0;
+        if (mb < 1024) {
+            return String.format("%.1f MB", mb);
+        }
+        return String.format("%.1f GB", mb / 1024.0);
     }
 
     private static final class ConversationItem {
