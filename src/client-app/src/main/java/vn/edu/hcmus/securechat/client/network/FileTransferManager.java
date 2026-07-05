@@ -6,6 +6,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -349,28 +351,23 @@ public class FileTransferManager {
                 return;
             }
 
-            // 3. Lưu file ra thư mục Downloads
-            File downloadsDir = new File(System.getProperty("user.home"), "Downloads" + File.separator + "SecureChat");
-            downloadsDir.mkdirs();
-            File outFile = new File(downloadsDir, transfer.meta.getFileName());
-
-            // Đặt tên tránh trùng lặp
-            if (outFile.exists()) {
+            // 3. Lưu file tạm vào thư mục temp, chưa phải Downloads
+            Path tempDir = Path.of(System.getProperty("java.io.tmpdir"), "SecureChatPending");
+            Files.createDirectories(tempDir);
+            Path outPath = tempDir.resolve(transfer.meta.getFileName());
+            if (Files.exists(outPath)) {
                 String baseName = getBaseName(transfer.meta.getFileName());
                 String ext = getExtension(transfer.meta.getFileName());
-                outFile = new File(downloadsDir, baseName + "_" + System.currentTimeMillis() + ext);
+                outPath = tempDir.resolve(baseName + "_" + System.currentTimeMillis() + ext);
             }
+            Files.write(outPath, fileBytes);
 
-            try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                fos.write(fileBytes);
-            }
-
-            log.info("FILE_ASSEMBLED transferId={} savedTo={} sha256OK",
-                    transfer.meta.getTransferId(), outFile.getAbsolutePath());
+            log.info("FILE_ASSEMBLED transferId={} pendingTo={} sha256OK",
+                    transfer.meta.getTransferId(), outPath);
 
             // 4. Callback
             if (onFileReceived != null) {
-                File finalFile = outFile;
+                File finalFile = outPath.toFile();
                 onFileReceived.onFileReceived(finalFile, transfer.meta.getFileName(), transfer.meta.getSenderId(), transfer.groupId);
             }
 
