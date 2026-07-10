@@ -51,10 +51,14 @@ public final class KeyStoreManager {
                     ks.size());
             return ks;
         } catch (NoSuchProviderException e) {
-            throw new KeyStoreException(
-                    "SunMSCAPI provider not available — "
-                    + "this application requires Windows 10/11. "
-                    + "Please run on a Windows machine.", e);
+            log.warn("SunMSCAPI provider not available (non-Windows OS). Using empty KeyStore to trigger fallback.");
+            try {
+                KeyStore emptyKs = KeyStore.getInstance("PKCS12");
+                emptyKs.load(null, null);
+                return emptyKs;
+            } catch (Exception ex) {
+                throw new KeyStoreException("Failed to create empty fallback KeyStore", ex);
+            }
         } catch (Exception e) {
             throw new KeyStoreException("Failed to load Windows-MY KeyStore", e);
         }
@@ -71,8 +75,14 @@ public final class KeyStoreManager {
                     ks.size());
             return ks;
         } catch (NoSuchProviderException e) {
-            throw new KeyStoreException(
-                    "SunMSCAPI provider not available — Windows required.", e);
+            log.warn("SunMSCAPI provider not available (non-Windows OS). Using empty KeyStore to trigger fallback.");
+            try {
+                KeyStore emptyKs = KeyStore.getInstance("PKCS12");
+                emptyKs.load(null, null);
+                return emptyKs;
+            } catch (Exception ex) {
+                throw new KeyStoreException("Failed to create empty fallback KeyStore", ex);
+            }
         } catch (Exception e) {
             throw new KeyStoreException("Failed to load Windows-ROOT KeyStore", e);
         }
