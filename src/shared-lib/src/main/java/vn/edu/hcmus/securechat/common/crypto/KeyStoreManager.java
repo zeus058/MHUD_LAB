@@ -1,11 +1,18 @@
 package vn.edu.hcmus.securechat.common.crypto;
 
+import java.io.FileInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import vn.edu.hcmus.securechat.common.util.PathUtil;
 
 /**
  * Quản lý KeyStore — Phương án A: Bắt buộc Windows SunMSCAPI.
@@ -77,5 +84,62 @@ public final class KeyStoreManager {
     public static boolean hasAlias(String alias) throws KeyStoreException {
         KeyStore ks = loadPersonalStore();
         return ks.containsAlias(alias);
+    }
+
+    /**
+     * Thử nạp cặp khóa/chứng chỉ từ file PFX/P12 trong thư mục data/keys/
+     * làm phương án dự phòng khi Windows KeyStore không có.
+     */
+    public static void loadFromPfxFallback(String alias, PfxResultHandler handler) throws KeyStoreException {
+        Path pfxPath = findPfxFile(alias);
+        if (pfxPath == null) {
+            throw new KeyStoreException("Key alias '" + alias + "' not found in Windows-MY " +
+                    "and no fallback PFX file found in data/keys/");
+        }
+
+        log.info("Loading fallback key/cert from: {}", pfxPath.toAbsolutePath());
+        try {
+            KeyStore p12 = KeyStore.getInstance("PKCS12");
+            char[] pwd = "changeit".toCharArray(); // Password mặc định cho lab/demo
+            try (FileInputStream fis = new FileInputStream(pfxPath.toFile())) {
+                p12.load(fis, pwd);
+            }
+
+            String foundAlias = p12.aliases().hasMoreElements() ? p12.aliases().nextElement() : null;
+            if (foundAlias == null) {
+                throw new KeyStoreException("No key entry found inside PFX: " + pfxPath);
+            }
+
+            PrivateKey key = (PrivateKey) p12.getKey(foundAlias, pwd);
+            java.security.cert.Certificate cert = p12.getCertificate(foundAlias);
+            if (key == null || cert == null) {
+                throw new KeyStoreException("Failed to extract key/cert from PFX: " + pfxPath);
+            }
+
+            handler.handle(key, (X509Certificate) cert);
+        } catch (Exception e) {
+            throw new KeyStoreException("Failed to load PFX fallback for alias '" + alias + "': " + e.getMessage(), e);
+        }
+    }
+
+    private static Path findPfxFile(String alias) {
+        // Ưu tiên tìm trong data/keys/ của dự án
+        Path[] candidates = {
+                PathUtil.resolve("data/keys/" + alias + ".pfx"),
+                PathUtil.resolve("data/keys/" + alias + ".p12"),
+                PathUtil.resolve("data/ca/" + alias + ".pfx"), // Trường hợp CA key
+                PathUtil.resolve("data/ca/" + alias + ".p12")
+        };
+
+        for (Path p : candidates) {
+            if (Files.exists(p) && Files.isRegularFile(p)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    public interface PfxResultHandler {
+        void handle(PrivateKey priv, X509Certificate cert) throws Exception;
     }
 }

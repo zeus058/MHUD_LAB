@@ -46,9 +46,10 @@ public class RegisterPanel extends JPanel {
     }
 
     private final RegisterListener listener;
-    private final JTextField usernameField;
-    private final JPasswordField passwordField;
-    private final JPasswordField confirmField;
+    private JTextField usernameField; // Email
+    private JTextField displayNameField; // Username (Display Name)
+    private JPasswordField passwordField;
+    private JPasswordField confirmField;
     private final JLabel statusLabel;
     private final JButton registerButton;
     private final ActivityFlowPanel flowPanel;
@@ -158,9 +159,24 @@ public class RegisterPanel extends JPanel {
         usernameField = UiStyles.styledTextField(24);
         UiStyles.setPlaceholder(usernameField, "you@example.com");
         usernameField.setAlignmentX(LEFT_ALIGNMENT);
-        usernameField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        usernameField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        usernameField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        usernameField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         formWrapper.add(usernameField);
+
+        formWrapper.add(Box.createVerticalStrut(10));
+
+        JLabel nameLbl = UiStyles.mutedLabel("Username");
+        nameLbl.setFont(UIConstants.FONT_HEADING.deriveFont(12f));
+        nameLbl.setAlignmentX(LEFT_ALIGNMENT);
+        formWrapper.add(nameLbl);
+        formWrapper.add(Box.createVerticalStrut(6));
+
+        displayNameField = UiStyles.styledTextField(24);
+        UiStyles.setPlaceholder(displayNameField, "Enter your username");
+        displayNameField.setAlignmentX(LEFT_ALIGNMENT);
+        displayNameField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        displayNameField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        formWrapper.add(displayNameField);
 
         formWrapper.add(Box.createVerticalStrut(10));
 
@@ -173,8 +189,8 @@ public class RegisterPanel extends JPanel {
         passwordField = UiStyles.styledPasswordField(24);
         UiStyles.setPlaceholder(passwordField, "Enter your password");
         passwordField.setAlignmentX(LEFT_ALIGNMENT);
-        passwordField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        passwordField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        passwordField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        passwordField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         formWrapper.add(passwordField);
 
         formWrapper.add(Box.createVerticalStrut(10));
@@ -188,8 +204,8 @@ public class RegisterPanel extends JPanel {
         confirmField = UiStyles.styledPasswordField(24);
         UiStyles.setPlaceholder(confirmField, "Repeat your password");
         confirmField.setAlignmentX(LEFT_ALIGNMENT);
-        confirmField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        confirmField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        confirmField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        confirmField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         formWrapper.add(confirmField);
 
         formWrapper.add(Box.createVerticalStrut(16));
@@ -198,8 +214,8 @@ public class RegisterPanel extends JPanel {
         registerButton = UiStyles.primaryButton("Create Account");
         registerButton.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 15f));
         registerButton.setAlignmentX(LEFT_ALIGNMENT);
-        registerButton.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        registerButton.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        registerButton.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        registerButton.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         registerButton.addActionListener(e -> performRegister());
         formWrapper.add(registerButton);
 
@@ -321,12 +337,13 @@ public class RegisterPanel extends JPanel {
 
     private void performRegister() {
         String username = usernameField.getText().trim();
+        String displayName = displayNameField.getText().trim();
         char[] password = passwordField.getPassword();
         char[] confirm = confirmField.getPassword();
 
         statusLabel.setText(" ");
         try {
-            if (username.isEmpty() || password.length == 0) {
+            if (username.isEmpty() || displayName.isEmpty() || password.length == 0) {
                 statusLabel.setText("Please fill in all required information.");
                 Arrays.fill(password, '\0');
                 return;
@@ -338,7 +355,7 @@ public class RegisterPanel extends JPanel {
             }
             if (ClientStoragePaths.keystoreExists(username)
                     || java.nio.file.Files.isRegularFile(
-                            java.nio.file.Path.of("data/client", "keystore_" + username + ".p12"))) {
+                            vn.edu.hcmus.securechat.common.util.PathUtil.resolve("data/client/keystore_" + username + ".p12"))) {
                 statusLabel.setForeground(UIConstants.SECURE_TEAL);
                 statusLabel.setText("Account \"" + username + "\" already exists. Please sign in.");
                 trace("Certificate already exists", "@" + username
@@ -365,7 +382,7 @@ public class RegisterPanel extends JPanel {
                     
                     trace("Sign CSR", "The CSR is signed with the private key so the CA can verify Proof-of-Possession.",
                             ActivityFlowPanel.Tone.ACTIVE);
-                    CertificateSigningRequest req = PkiManager.createCsrPayload("CN=" + username + ", O=Mock");
+                    CertificateSigningRequest req = PkiManager.createCsrPayload("CN=" + username + ",O=SecureChat,C=VN,OU=" + displayName);
                     
                     PacketFrame frame = new PacketFrame(PacketFrame.TYPE_CSR_REQUEST, (byte)1, (short)0, JsonSerializer.toBytes(req));
                     
@@ -418,6 +435,7 @@ public class RegisterPanel extends JPanel {
 
     private void setFormEnabled(boolean enabled) {
         usernameField.setEnabled(enabled);
+        displayNameField.setEnabled(enabled);
         passwordField.setEnabled(enabled);
         confirmField.setEnabled(enabled);
         registerButton.setEnabled(enabled);

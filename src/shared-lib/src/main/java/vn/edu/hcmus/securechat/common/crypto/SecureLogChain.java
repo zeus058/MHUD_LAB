@@ -17,6 +17,8 @@ import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import vn.edu.hcmus.securechat.common.util.PathUtil;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -27,7 +29,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  */
 public class SecureLogChain {
     private static final Logger log = LoggerFactory.getLogger(SecureLogChain.class);
-    private static final String LOG_FILE_PATH = "data/secure_audit.log";
+    private static final String LOG_FILE_PATH = PathUtil.resolve("data/secure_audit.log").toString();
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     
     // Khóa HMAC riêng để ký log (bảo mật)

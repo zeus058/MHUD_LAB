@@ -17,6 +17,7 @@
         <module>kdc-server</module>
         <module>chat-server</module>
         <module>client-app</module>
+        <module>notification-server</module>
     </modules>
 
     <properties>
@@ -35,7 +36,7 @@
 
     <dependencyManagement>
         <dependencies>
-            <!-- Mật mã học lõi - BouncyCastle -->
+            <!-- M\u1eadt m\u00e3 h\u1ecdc l\u00f5i - BouncyCastle -->
             <dependency>
                 <groupId>org.bouncycastle</groupId>
                 <artifactId>bcprov-jdk18on</artifactId>
@@ -47,7 +48,7 @@
                 <version>${bouncycastle.version}</version>
             </dependency>
 
-            <!-- Cơ sở dữ liệu SQLite -->
+            <!-- C\u01a1 s\u1edf d\u1eef li\u1ec7u SQLite -->
             <dependency>
                 <groupId>org.xerial</groupId>
                 <artifactId>sqlite-jdbc</artifactId>
@@ -90,7 +91,7 @@
     </dependencyManagement>
     
     <dependencies>
-        <!-- Các thư viện chung cho toàn bộ module -->
+        <!-- C\u00e1c th\u01b0 vi\u1ec7n chung cho to\u00e0n b\u1ed9 module -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>

@@ -105,6 +105,23 @@ public class TicketCache {
         return null;
     }
 
+    public static long getTgtExpiresAt(String username, char[] password) {
+        byte[] data = getTicket(username, "TGT", password);
+        if (data == null) return 0;
+        try {
+            String str = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+            String[] parts = str.split("\\|\\|\\|");
+            if (parts.length >= 4) {
+                return Long.parseLong(parts[3]);
+            }
+        } catch (Exception e) {
+            log.warn("Could not parse expiresAt from TGT cache", e);
+        } finally {
+            Arrays.fill(data, (byte) 0);
+        }
+        return 0;
+    }
+
     public static void clearCache(String username) {
         try {
             Path userDir = ClientStoragePaths.userDir(username);

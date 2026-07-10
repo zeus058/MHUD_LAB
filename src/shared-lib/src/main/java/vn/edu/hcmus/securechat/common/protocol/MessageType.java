@@ -32,9 +32,10 @@ public enum MessageType {
     GROUP_MESSAGE(PacketFrame.TYPE_GROUP_MESSAGE, "Tin nhắn nhóm (client fan-out)"),
     FILE_INIT(PacketFrame.TYPE_FILE_INIT, "Bắt đầu truyền file (metadata + FileKey E2EE)"),
     FILE_CHUNK(PacketFrame.TYPE_FILE_CHUNK, "Chunk nhị phân mã hóa của file"),
-    CALL_SDP_OFFER(PacketFrame.TYPE_CALL_SDP_OFFER, "WebRTC SDP Offer (E2EE signaling)"),
-    CALL_SDP_ANSWER(PacketFrame.TYPE_CALL_SDP_ANSWER, "WebRTC SDP Answer (E2EE signaling)"),
-    CALL_ICE_CANDIDATE(PacketFrame.TYPE_CALL_ICE_CANDIDATE, "WebRTC ICE Candidate (E2EE signaling)"),
+    REVOKE_REQUEST(PacketFrame.TYPE_REVOKE_REQUEST, "Client yêu cầu thu hồi chứng chỉ"),
+    AUDIT_LOG_REQUEST(PacketFrame.TYPE_AUDIT_LOG_REQUEST, "Admin yêu cầu xem audit log"),
+    AUDIT_LOG_RESPONSE(PacketFrame.TYPE_AUDIT_LOG_RESPONSE, "Server trả audit log"),
+    RENEW_TGT_REQUEST(PacketFrame.TYPE_RENEW_TGT_REQUEST, "Client yêu cầu gia hạn TGT"),
 
     ERROR(PacketFrame.TYPE_ERROR, "Generic error response");
 

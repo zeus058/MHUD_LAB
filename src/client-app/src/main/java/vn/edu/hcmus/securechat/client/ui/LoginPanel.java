@@ -147,8 +147,8 @@ public class LoginPanel extends JPanel {
         usernameField = UiStyles.styledTextField(24);
         UiStyles.setPlaceholder(usernameField, "you@example.com");
         usernameField.setAlignmentX(LEFT_ALIGNMENT);
-        usernameField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        usernameField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        usernameField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        usernameField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         formWrapper.add(usernameField);
 
         formWrapper.add(Box.createVerticalStrut(14));
@@ -162,8 +162,8 @@ public class LoginPanel extends JPanel {
         passwordField = UiStyles.styledPasswordField(24);
         UiStyles.setPlaceholder(passwordField, "Enter your password");
         passwordField.setAlignmentX(LEFT_ALIGNMENT);
-        passwordField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        passwordField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        passwordField.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        passwordField.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         formWrapper.add(passwordField);
 
         formWrapper.add(Box.createVerticalStrut(18));
@@ -172,8 +172,8 @@ public class LoginPanel extends JPanel {
         loginButton = UiStyles.primaryButton("Sign In");
         loginButton.setFont(UIConstants.FONT_BODY.deriveFont(Font.BOLD, 16f));
         loginButton.setAlignmentX(LEFT_ALIGNMENT);
-        loginButton.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 40));
-        loginButton.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 40));
+        loginButton.setMaximumSize(new Dimension(AUTH_FORM_WIDTH, 46));
+        loginButton.setPreferredSize(new Dimension(AUTH_FORM_WIDTH, 46));
         loginButton.addActionListener(e -> performLogin());
         formWrapper.add(loginButton);
 
@@ -339,6 +339,14 @@ public class LoginPanel extends JPanel {
 
     public void trace(String title, String body, ActivityFlowPanel.Tone tone) {
         flowPanel.addEvent(title, body, tone);
+    }
+
+    public void reset() {
+        passwordField.setText("");
+        statusLabel.setText(" ");
+        loginButton.setText("Sign In");
+        setFormEnabled(true);
+        flowPanel.clear();
     }
 
     private void setFormEnabled(boolean enabled) {

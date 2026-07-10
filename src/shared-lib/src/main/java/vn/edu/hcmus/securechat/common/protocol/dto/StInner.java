@@ -2,6 +2,8 @@ package vn.edu.hcmus.securechat.common.protocol.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import vn.edu.hcmus.securechat.common.protocol.Role;
+
 /**
  * ST inner JSON (trước khi mã hóa bằng PU_ChatServer) — Contrains.md mục 2.3.
  *
@@ -41,6 +43,9 @@ public class StInner {
     @JsonProperty("cv")
     private String cv;
 
+    @JsonProperty("role")
+    private Role role = Role.USER;
+
     @JsonProperty("clientCertSerial")
     private String clientCertSerial;
 
@@ -59,7 +64,7 @@ public class StInner {
 
     public StInner(String stId, String clientId, String clientPubKey, String targetServer,
                    long issuedAt, long expiresAt, String sessionKey, String cv,
-                   String clientCertSerial) {
+                   String clientCertSerial, Role role) {
         this.stId = stId;
         this.clientId = clientId;
         this.clientPubKey = clientPubKey;
@@ -69,6 +74,7 @@ public class StInner {
         this.sessionKey = sessionKey;
         this.cv = cv;
         this.clientCertSerial = clientCertSerial;
+        this.role = role;
     }
 
     public String getStId() { return stId; }
@@ -97,4 +103,7 @@ public class StInner {
 
     public String getClientCertSerial() { return clientCertSerial; }
     public void setClientCertSerial(String clientCertSerial) { this.clientCertSerial = clientCertSerial; }
+
+    public Role getRole() { return role; }
+    public void setRole(Role role) { this.role = role; }
 }

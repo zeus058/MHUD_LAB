@@ -126,15 +126,11 @@ public class ClientApp extends JFrame {
             protected Object[] doInBackground() throws Exception {
                 try {
                     log.info("Establishing secure session for user={}", username);
-
-                    // 1. Synchronize time
                     loginPanel.trace("Synchronize time", "Fetching network time to prevent replay within the 300-second window.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     NtpTimeClient.syncTime();
                     loginPanel.trace("Time validated", "The authenticator timestamp will use the synchronized clock.",
                             ActivityFlowPanel.Tone.SUCCESS);
-
-                    // 2. Request Kerberos tickets
                     KerberosClient kerberosClient = new KerberosClient();
                     loginPanel.trace("Request TGT", "The client signs the TGT request with the X.509 certificate and sends it to AS.",
                             ActivityFlowPanel.Tone.ACTIVE);
@@ -147,13 +143,16 @@ public class ClientApp extends JFrame {
                     loginPanel.trace("ST issued", "The Service Ticket contains Control Vector CHAT_SERVICE and key K_A_ChatAuth.",
                             ActivityFlowPanel.Tone.SUCCESS);
 
-                    // 3. Run E2EE handshake with Chat Server using ST
+                    // Request ST for Notification Server (M\u1ee5c 3: Multi-service SSO)
+                    loginPanel.trace("Request Notif ST", "Requesting ST for Notification Server to demonstrate Multi-service SSO.",
+                            ActivityFlowPanel.Tone.ACTIVE);
+                    kerberosClient.requestSt(username, password, ServerConfig.NOTIFICATION_SERVICE_ID);
+                    loginPanel.trace("Notif ST issued", "Successfully received Service Ticket for Notification Server.",
+                            ActivityFlowPanel.Tone.SUCCESS);
                     E2eeCryptoService e2eeService = new E2eeCryptoService();
                     e2eeService.setActivitySink((title, body, tone) ->
                             loginPanel.trace(title, body, ActivityFlowPanel.Tone.valueOf(tone.name())));
                     e2eeService.performHandshake(username, password);
-
-                    // 4. Unlock local database with an Argon2id-derived key
                     loginPanel.trace("Unlock local database", "Chat history is unlocked with an Argon2id-derived key.",
                             ActivityFlowPanel.Tone.ACTIVE);
                     LocalDatabase localDb = new LocalDatabase(username);
@@ -165,7 +164,27 @@ public class ClientApp extends JFrame {
                     loginPanel.trace("Session ready", "Sign-in is complete; message content will use Double Ratchet.",
                             ActivityFlowPanel.Tone.SUCCESS);
 
+                    Thread renewThread = new Thread(() -> {
+                        while (!Thread.currentThread().isInterrupted()) {
+                            try {
+                                Thread.sleep(60000); // Check every 60s
+                                kerberosClient.renewTgtIfNeeded(username);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            } catch (Exception ex) {
+                                log.warn("Failed to auto-renew TGT in background", ex);
+                            }
+                        }
+                    });
+                    renewThread.setDaemon(true);
+                    renewThread.setName("tgt-renewer");
+                    renewThread.start();
+
+                    startNotificationClient(username, password);
+
                     return new Object[]{e2eeService, localDb};
+
                 } finally {
                     Arrays.fill(password, '\0');
                 }
@@ -215,6 +234,9 @@ public class ClientApp extends JFrame {
             e2ee.disconnect();
             root.remove(chatPanel);
             chatPanel = null;
+            if (loginPanel != null) {
+                loginPanel.reset();
+            }
             rootCards.show(root, CARD_LOGIN);
             authCards.show(authContainer, CARD_LOGIN);
             revalidate();
@@ -254,5 +276,77 @@ public class ClientApp extends JFrame {
             app.setVisible(true);
             log.info("SecureChat Client started");
         });
+    }
+
+    private void startNotificationClient(String username, char[] password) {
+        // L\u1ea5y ST notification c\u00f3 tr\u01b0\u1edbc khi x\u00f3a password
+        byte[] stData = vn.edu.hcmus.securechat.client.kerberos.TicketCache.getTicket(username, "ST_" + ServerConfig.NOTIFICATION_SERVICE_ID, password);
+        if (stData == null) {
+            log.warn("Notification ST not found, notification client won't start");
+            return;
+        }
+        
+        Thread t = new Thread(() -> {
+            try {
+                String cacheStr = new String(stData, java.nio.charset.StandardCharsets.UTF_8);
+                String[] parts = cacheStr.split("\\|\\|\\|");
+                String stBase64 = parts[0];
+                byte[] sessionKey = java.util.Base64.getDecoder().decode(parts[1]);
+
+                long timestamp = NtpTimeClient.getCurrentNetworkTime() / 1000L;
+                byte[] nonceBytes = new byte[vn.edu.hcmus.securechat.common.crypto.CryptoConstants.NONCE_SIZE_BYTES];
+                new java.security.SecureRandom().nextBytes(nonceBytes);
+                String authNonce = java.util.Base64.getEncoder().encodeToString(nonceBytes);
+
+                vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson auth = 
+                        new vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson(
+                                username, timestamp, authNonce, "", "NOTIFICATION", 1L, "");
+                
+                byte[] authBytes = vn.edu.hcmus.securechat.common.protocol.JsonSerializer.toBytes(auth);
+                byte[] encryptedAuth = vn.edu.hcmus.securechat.common.crypto.AesGcmCipher.encrypt(sessionKey, authBytes);
+                String authBase64 = java.util.Base64.getEncoder().encodeToString(encryptedAuth);
+
+                vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest req = 
+                        new vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest(stBase64, authBase64, "", "", "");
+                byte[] reqBytes = vn.edu.hcmus.securechat.common.protocol.JsonSerializer.toBytes(req);
+                vn.edu.hcmus.securechat.common.protocol.PacketFrame frame = 
+                        new vn.edu.hcmus.securechat.common.protocol.PacketFrame(vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_HANDSHAKE, (byte) 1, (short) 0, reqBytes);
+
+                java.net.Socket socket = new java.net.Socket(ServerConfig.NOTIFICATION_HOST, ServerConfig.NOTIFICATION_PORT);
+                socket.setSoTimeout(0); // keep alive
+                
+                vn.edu.hcmus.securechat.common.protocol.PacketFrame.write(socket.getOutputStream(), frame.getType(), frame.getPayload());
+                vn.edu.hcmus.securechat.common.protocol.PacketFrame response = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
+                
+                if (response.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
+                    log.info("Notification client successfully connected");
+                    
+                    while (true) {
+                        vn.edu.hcmus.securechat.common.protocol.PacketFrame msgFrame = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
+                        if (msgFrame.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
+                            vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope env = 
+                                    vn.edu.hcmus.securechat.common.protocol.JsonSerializer.fromBytes(msgFrame.getPayload(), vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope.class);
+                            
+                            if ("SYSTEM".equals(env.getSenderId())) {
+                                byte[] encData = java.util.Base64.getDecoder().decode(env.getPayload());
+                                byte[] plainBytes = vn.edu.hcmus.securechat.common.crypto.AesGcmCipher.decrypt(sessionKey, encData);
+                                String message = new String(plainBytes, java.nio.charset.StandardCharsets.UTF_8);
+                                
+                                javax.swing.SwingUtilities.invokeLater(() -> {
+                                    javax.swing.JOptionPane.showMessageDialog(null, "System Notification: " + message, "Notification", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                if (!(e instanceof java.io.EOFException) && !(e instanceof java.net.SocketException)) {
+                    log.error("Notification client error", e);
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.setName("notification-client");
+        t.start();
     }
 }

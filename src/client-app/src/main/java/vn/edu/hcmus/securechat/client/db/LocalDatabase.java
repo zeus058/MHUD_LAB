@@ -276,4 +276,22 @@ public class LocalDatabase {
             log.info("Copying legacy database {} -> {}", source, target);
         }
     }
+
+    public java.util.List<String> getPeersWithHistory() {
+        java.util.List<String> peers = new java.util.ArrayList<>();
+        if (dbKey == null) return peers;
+        String sql = "SELECT DISTINCT peer FROM messages WHERE owner = ? AND peer IS NOT NULL AND peer != ''";
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    peers.add(rs.getString("peer"));
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to load peers with history", e);
+        }
+        return peers;
+    }
 }

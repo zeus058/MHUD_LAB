@@ -2,6 +2,8 @@ package vn.edu.hcmus.securechat.common.protocol.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import vn.edu.hcmus.securechat.common.protocol.Role;
+
 /**
  * TGT inner JSON (trước khi mã hóa bằng PU_TGS) — Contrains.md mục 2.3.
  *
@@ -44,6 +46,9 @@ public class TgtInner {
     @JsonProperty("cv")
     private String cv;
 
+    @JsonProperty("role")
+    private Role role = Role.USER;
+
     @JsonProperty("clientCert")
     private String clientCert; // Base64 of DER-encoded client certificate
 
@@ -74,7 +79,7 @@ public class TgtInner {
 
     public TgtInner(String tgtId, String clientId, String targetTgs, long issuedAt,
                     long expiresAt, long renewTill, String sessionKey, boolean renewable,
-                    String cv, String clientCert) {
+                    String cv, String clientCert, Role role) {
         this.tgtId = tgtId;
         this.clientId = clientId;
         this.targetTgs = targetTgs;
@@ -85,6 +90,7 @@ public class TgtInner {
         this.renewable = renewable;
         this.cv = cv;
         this.clientCert = clientCert;
+        this.role = role;
     }
 
     public String getTgtId() { return tgtId; }
@@ -116,4 +122,7 @@ public class TgtInner {
 
     public String getClientCert() { return clientCert; }
     public void setClientCert(String clientCert) { this.clientCert = clientCert; }
+
+    public Role getRole() { return role; }
+    public void setRole(Role role) { this.role = role; }
 }

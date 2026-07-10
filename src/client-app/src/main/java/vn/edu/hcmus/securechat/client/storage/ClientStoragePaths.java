@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import vn.edu.hcmus.securechat.common.util.PathUtil;
+
 /**
  * Đường dẫn lưu trữ cục bộ trên client — thống nhất dưới {@code data/client/}.
  * Mỗi người dùng có thư mục riêng để tránh ghi đè khi test nhiều tài khoản trên một máy.
@@ -16,7 +18,7 @@ public final class ClientStoragePaths {
     }
 
     public static Path clientRoot() {
-        return Path.of(CLIENT_DATA_ROOT);
+        return PathUtil.resolve(CLIENT_DATA_ROOT);
     }
 
     public static Path userDir(String username) {

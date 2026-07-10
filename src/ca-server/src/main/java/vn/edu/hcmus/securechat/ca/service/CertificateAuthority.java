@@ -78,22 +78,23 @@ public class CertificateAuthority {
     private void initializeCaKeys() throws KeyStoreException, NoSuchAlgorithmException {
         KeyStore ks = KeyStoreManager.loadPersonalStore();
 
-        if (!ks.containsAlias(CA_ALIAS)) {
-            throw new KeyStoreException(
-                    "CA Private Key alias '" + CA_ALIAS + "' not found in Windows-MY KeyStore. " +
-                            "Please create CA certificate first using: certutil -importpfx ca-cert.pfx");
-        }
-
-        try {
-            caPrivateKey = (PrivateKey) ks.getKey(CA_ALIAS, null);
-            caCertificate = (X509Certificate) ks.getCertificate(CA_ALIAS);
-
-            log.info("Loaded CA certificate: CN={}, NotBefore={}, NotAfter={}",
-                    caCertificate.getSubjectX500Principal().getName(),
-                    caCertificate.getNotBefore(),
-                    caCertificate.getNotAfter());
-        } catch (NoSuchAlgorithmException | UnrecoverableKeyException e) {
-            throw new KeyStoreException("Failed to load CA key/cert from Windows-MY", e);
+        if (ks.containsAlias(CA_ALIAS)) {
+            try {
+                caPrivateKey = (PrivateKey) ks.getKey(CA_ALIAS, null);
+                caCertificate = (X509Certificate) ks.getCertificate(CA_ALIAS);
+                log.info("Loaded CA certificate from Windows-MY: CN={}", 
+                    caCertificate.getSubjectX500Principal().getName());
+            } catch (NoSuchAlgorithmException | UnrecoverableKeyException e) {
+                throw new KeyStoreException("Failed to load CA key/cert from Windows-MY", e);
+            }
+        } else {
+            // Fallback to PFX file in data/ca/
+            KeyStoreManager.loadFromPfxFallback(CA_ALIAS, (priv, cert) -> {
+                this.caPrivateKey = priv;
+                this.caCertificate = cert;
+            });
+            log.info("Loaded CA certificate from fallback file: CN={}", 
+                caCertificate.getSubjectX500Principal().getName());
         }
     }
 

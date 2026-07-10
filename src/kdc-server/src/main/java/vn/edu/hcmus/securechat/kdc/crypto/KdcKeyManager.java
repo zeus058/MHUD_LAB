@@ -4,7 +4,6 @@ import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
@@ -46,6 +45,7 @@ public final class KdcKeyManager {
     private static final String AS_ALIAS   = "securechat-as";
     private static final String TGS_ALIAS  = "securechat-tgs";
     private static final String CHAT_ALIAS = "securechat-chat";
+    private static final String NOTIFICATION_ALIAS = "securechat-notification";
     private static final String CA_ALIAS   = "securechat-ca";
 
     private final PrivateKey asPrivateKey;
@@ -53,6 +53,7 @@ public final class KdcKeyManager {
     private final PrivateKey tgsPrivateKey;
     private final X509Certificate tgsCertificate;
     private final PublicKey chatServerPublicKey;
+    private final PublicKey notificationServerPublicKey;
     private final X509Certificate caCertificate;
     private final Set<TrustAnchor> trustAnchors;
 
@@ -63,137 +64,85 @@ public final class KdcKeyManager {
         if (personalStore.containsAlias(AS_ALIAS)) {
             asPrivateKey = loadPrivateKey(personalStore, AS_ALIAS);
             asCertificate = loadCertificate(personalStore, AS_ALIAS);
+            log.info("Loaded AS cert from Windows-MY");
         } else {
-            loadFromPfxFallback(AS_ALIAS, (priv, cert) -> {
-                asPrivateKey = priv;
-                asCertificate = cert;
+            final PrivateKey[] k = new PrivateKey[1];
+            final X509Certificate[] c = new X509Certificate[1];
+            KeyStoreManager.loadFromPfxFallback(AS_ALIAS, (priv, cert) -> {
+                k[0] = priv;
+                c[0] = cert;
             });
+            asPrivateKey = k[0];
+            asCertificate = c[0];
+            log.info("Loaded AS cert from fallback file");
         }
 
         // Load TGS key pair
         if (personalStore.containsAlias(TGS_ALIAS)) {
             tgsPrivateKey = loadPrivateKey(personalStore, TGS_ALIAS);
             tgsCertificate = loadCertificate(personalStore, TGS_ALIAS);
+            log.info("Loaded TGS cert from Windows-MY");
         } else {
-            loadFromPfxFallback(TGS_ALIAS, (priv, cert) -> {
-                tgsPrivateKey = priv;
-                tgsCertificate = cert;
+            final PrivateKey[] k = new PrivateKey[1];
+            final X509Certificate[] c = new X509Certificate[1];
+            KeyStoreManager.loadFromPfxFallback(TGS_ALIAS, (priv, cert) -> {
+                k[0] = priv;
+                c[0] = cert;
             });
+            tgsPrivateKey = k[0];
+            tgsCertificate = c[0];
+            log.info("Loaded TGS cert from fallback file");
         }
 
         // Load Chat Server certificate (chỉ cần public key)
         X509Certificate chatCert;
         if (personalStore.containsAlias(CHAT_ALIAS)) {
             chatCert = loadCertificate(personalStore, CHAT_ALIAS);
+            log.info("Loaded Chat cert from Windows-MY");
         } else {
             final X509Certificate[] tmp = new X509Certificate[1];
-            loadFromPfxFallback(CHAT_ALIAS, (priv, cert) -> tmp[0] = cert);
+            KeyStoreManager.loadFromPfxFallback(CHAT_ALIAS, (priv, cert) -> tmp[0] = cert);
             chatCert = tmp[0];
+            log.info("Loaded Chat cert from fallback file");
         }
         chatServerPublicKey = chatCert.getPublicKey();
+
+        // Load Notification Server certificate
+        X509Certificate notifCert;
+        if (personalStore.containsAlias(NOTIFICATION_ALIAS)) {
+            notifCert = loadCertificate(personalStore, NOTIFICATION_ALIAS);
+            log.info("Loaded Notification cert from Windows-MY");
+        } else {
+            final X509Certificate[] tmpNotif = new X509Certificate[1];
+            try {
+                KeyStoreManager.loadFromPfxFallback(NOTIFICATION_ALIAS, (priv, cert) -> tmpNotif[0] = cert);
+            } catch (Exception e) {
+                log.warn("Could not load notification cert, falling back to chat cert: {}", e.getMessage());
+                tmpNotif[0] = chatCert; // Fallback so KDC doesn't crash if cert isn't generated yet
+            }
+            notifCert = tmpNotif[0];
+            log.info("Loaded Notification cert from fallback file (or fallback)");
+        }
+        notificationServerPublicKey = notifCert.getPublicKey();
 
         // Load CA Root certificate
         if (personalStore.containsAlias(CA_ALIAS)) {
             caCertificate = loadCertificate(personalStore, CA_ALIAS);
+            log.info("Loaded CA cert from Windows-MY");
         } else {
             final X509Certificate[] tmp = new X509Certificate[1];
-            loadFromPfxFallback(CA_ALIAS, (priv, cert) -> tmp[0] = cert);
+            KeyStoreManager.loadFromPfxFallback(CA_ALIAS, (priv, cert) -> tmp[0] = cert);
             caCertificate = tmp[0];
+            log.info("Loaded CA cert from fallback file");
         }
         trustAnchors = Collections.singleton(new TrustAnchor(caCertificate, null));
 
-        log.info("KDC Key Manager initialized: AS={}, TGS={}, Chat={}, CA={}",
+        log.info("KDC Key Manager initialized: AS={}, TGS={}, Chat={}, Notif={}, CA={}",
                 asCertificate.getSubjectX500Principal().getName(),
                 tgsCertificate.getSubjectX500Principal().getName(),
                 chatCert.getSubjectX500Principal().getName(),
+                notifCert.getSubjectX500Principal().getName(),
                 caCertificate.getSubjectX500Principal().getName());
-    }
-
-    /**
-     * Attempt to find and load a PKCS#12 (PFX/.p12) file for the given alias and
-     * supply the private key and certificate to the handler. The method will
-     * search common locations and use env var `KDC_PFX_PASSWORD` as password when
-     * loading.
-     */
-    private void loadFromPfxFallback(String alias, PfxResultHandler handler) throws KeyStoreException {
-        try {
-            Path pfxPath = findPfxFile(alias);
-            if (pfxPath == null) {
-                throw new KeyStoreException(
-                        "Required alias '" + alias + "' not found in Windows-MY KeyStore and no PFX file located. Please provide "
-                                + alias + ".pfx in kdc-server/config or set up the certificate in Windows-MY.");
-            }
-
-            String pass = System.getenv("KDC_PFX_PASSWORD");
-            char[] pwd = pass != null ? pass.toCharArray() : null;
-
-            KeyStore p12 = KeyStore.getInstance("PKCS12");
-            try (FileInputStream fis = new FileInputStream(pfxPath.toFile())) {
-                p12.load(fis, pwd);
-            }
-
-            // find first key entry
-            String foundAlias = null;
-            for (java.util.Enumeration<String> e = p12.aliases(); e.hasMoreElements();) {
-                String a = e.nextElement();
-                if (p12.isKeyEntry(a)) {
-                    foundAlias = a;
-                    break;
-                }
-            }
-
-            if (foundAlias == null) {
-                throw new KeyStoreException("No key entry found inside PFX: " + pfxPath);
-            }
-
-            PrivateKey key = (PrivateKey) p12.getKey(foundAlias, pwd);
-            java.security.cert.Certificate cert = p12.getCertificate(foundAlias);
-            if (key == null || cert == null) {
-                throw new KeyStoreException("Failed to extract key/cert from PFX: " + pfxPath);
-            }
-
-            handler.handle(key, (X509Certificate) cert);
-
-        } catch (Exception e) {
-            throw new KeyStoreException("Failed to load PFX fallback for alias '" + alias + "': " + e.getMessage(), e);
-        }
-    }
-
-    private Path findPfxFile(String alias) {
-        // Search locations: env KDC_PFX_DIR, src/kdc-server/config, kdc-server/config, cwd
-        String dirEnv = System.getenv("KDC_PFX_DIR");
-        String[] candidates = {
-                dirEnv != null ? Paths.get(dirEnv, alias + ".pfx").toString() : null,
-                dirEnv != null ? Paths.get(dirEnv, alias + ".p12").toString() : null,
-                Paths.get("src", "kdc-server", "config", alias + ".pfx").toString(),
-                Paths.get("src", "kdc-server", "config", alias + ".p12").toString(),
-                Paths.get("kdc-server", "config", alias + ".pfx").toString(),
-                Paths.get("kdc-server", "config", alias + ".p12").toString(),
-                Paths.get(alias + ".pfx").toString(),
-                Paths.get(alias + ".p12").toString()
-        };
-
-        for (String p : candidates) {
-            if (p == null) continue;
-            Path path = Paths.get(p);
-            if (Files.exists(path) && Files.isRegularFile(path)) {
-                return path;
-            }
-        }
-        return null;
-    }
-
-    private interface PfxResultHandler {
-        void handle(PrivateKey priv, X509Certificate cert) throws Exception;
-    }
-
-    private void validateAlias(KeyStore ks, String alias, String name)
-            throws KeyStoreException {
-        if (!ks.containsAlias(alias)) {
-            throw new KeyStoreException(
-                    name + " key alias '" + alias + "' not found in Windows-MY KeyStore. "
-                    + "Please import using: certutil -importpfx " + alias + ".pfx");
-        }
     }
 
     private PrivateKey loadPrivateKey(KeyStore ks, String alias) throws KeyStoreException {
@@ -260,6 +209,7 @@ public final class KdcKeyManager {
     public X509Certificate getTgsCertificate()   { return tgsCertificate; }
     public PublicKey getTgsPublicKey()           { return tgsCertificate.getPublicKey(); }
     public PublicKey getChatServerPublicKey()    { return chatServerPublicKey; }
+    public PublicKey getNotificationServerPublicKey() { return notificationServerPublicKey; }
     public X509Certificate getCaCertificate()   { return caCertificate; }
     public Set<TrustAnchor> getTrustAnchors()   { return trustAnchors; }
 }

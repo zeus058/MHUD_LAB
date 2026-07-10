@@ -36,19 +36,34 @@ public final class ChatKeyManager {
         KeyStore personalStore = KeyStoreManager.loadPersonalStore();
 
         // Load Chat Server key pair
-        if (!personalStore.containsAlias(CHAT_ALIAS)) {
-            throw new KeyStoreException(
-                    "Chat Server key alias '" + CHAT_ALIAS + "' not found in Windows-MY KeyStore.");
+        if (personalStore.containsAlias(CHAT_ALIAS)) {
+            chatPrivateKey = loadPrivateKey(personalStore, CHAT_ALIAS);
+            chatCertificate = loadCertificate(personalStore, CHAT_ALIAS);
+            log.info("Loaded Chat Server cert from Windows-MY");
+        } else {
+            final PrivateKey[] k = new PrivateKey[1];
+            final X509Certificate[] c = new X509Certificate[1];
+            KeyStoreManager.loadFromPfxFallback(CHAT_ALIAS, (priv, cert) -> {
+                k[0] = priv;
+                c[0] = cert;
+            });
+            chatPrivateKey = k[0];
+            chatCertificate = c[0];
+            log.info("Loaded Chat Server cert from fallback file");
         }
-        chatPrivateKey = loadPrivateKey(personalStore, CHAT_ALIAS);
-        chatCertificate = loadCertificate(personalStore, CHAT_ALIAS);
 
         // Load CA Root certificate
-        if (!personalStore.containsAlias(CA_ALIAS)) {
-            throw new KeyStoreException(
-                    "CA Root alias '" + CA_ALIAS + "' not found in Windows-MY KeyStore.");
+        if (personalStore.containsAlias(CA_ALIAS)) {
+            caCertificate = loadCertificate(personalStore, CA_ALIAS);
+            log.info("Loaded CA Root from Windows-MY");
+        } else {
+            final X509Certificate[] c = new X509Certificate[1];
+            KeyStoreManager.loadFromPfxFallback(CA_ALIAS, (priv, cert) -> {
+                c[0] = cert;
+            });
+            caCertificate = c[0];
+            log.info("Loaded CA Root from fallback file");
         }
-        caCertificate = loadCertificate(personalStore, CA_ALIAS);
 
         log.info("Chat KeyManager initialized: chat={}, ca={}",
                 chatCertificate.getSubjectX500Principal().getName(),

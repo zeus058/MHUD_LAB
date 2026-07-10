@@ -23,7 +23,8 @@ public class ErrorResponse {
     public static final String ERR_MAC_FAILED         = "MAC_FAILED";
     public static final String ERR_INTERNAL           = "INTERNAL_ERROR";
     public static final String ERR_BAD_REQUEST        = "BAD_REQUEST";
-
+    public static final String ERR_UNAUTHORIZED       = "UNAUTHORIZED";
+    public static final String ERR_FORBIDDEN          = "FORBIDDEN";
     @JsonProperty("errorCode")
     private String errorCode;
 

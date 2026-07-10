@@ -26,14 +26,18 @@ public class ChatHandshakeRequest {
     @JsonProperty("sessionNonce")
     private String sessionNonce;
 
+    @JsonProperty("displayName")
+    private String displayName;
+
     public ChatHandshakeRequest() {}
 
     public ChatHandshakeRequest(String st, String authenticator,
-                                 String ecdhePubKey, String sessionNonce) {
+                                 String ecdhePubKey, String sessionNonce, String displayName) {
         this.st = st;
         this.authenticator = authenticator;
         this.ecdhePubKey = ecdhePubKey;
         this.sessionNonce = sessionNonce;
+        this.displayName = displayName;
     }
 
     public String getSt() { return st; }
@@ -47,4 +51,7 @@ public class ChatHandshakeRequest {
 
     public String getSessionNonce() { return sessionNonce; }
     public void setSessionNonce(String sessionNonce) { this.sessionNonce = sessionNonce; }
+
+    public String getDisplayName() { return displayName; }
+    public void setDisplayName(String displayName) { this.displayName = displayName; }
 }

@@ -27,7 +27,9 @@ import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.client.storage.ClientStoragePaths;
 import vn.edu.hcmus.securechat.common.protocol.dto.CertificateSigningRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.RevokeRequest;
 import vn.edu.hcmus.securechat.common.crypto.CryptoConstants;
+import vn.edu.hcmus.securechat.common.util.PathUtil;
 
 /**
  * Manages RSA key generation, CSR creation, and local KeyStore storage.
@@ -77,6 +79,23 @@ public class PkiManager {
     }
 
     /**
+     * Creates the RevokeRequest DTO.
+     */
+    public static RevokeRequest createRevokePayload(String username, String certSerial, String reason) throws Exception {
+        if (currentKeyPair == null) {
+            throw new IllegalStateException("KeyPair has not been loaded.");
+        }
+
+        String dataToSign = username + "|" + certSerial + "|" + reason;
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initSign(currentKeyPair.getPrivate());
+        sig.update(dataToSign.getBytes(StandardCharsets.UTF_8));
+        String signatureBase64 = Base64.getEncoder().encodeToString(sig.sign());
+
+        return new RevokeRequest(username, certSerial, reason, signatureBase64);
+    }
+
+    /**
      * Saves Private Key and Certificate Chain into a password-protected PKCS12 file.
      */
     public static void saveKeyStore(String username, char[] password, String certBase64, String caChainBase64) throws Exception {
@@ -123,7 +142,9 @@ public class PkiManager {
     public static void loadKeyStore(String username, char[] password) throws Exception {
         Path ksPath = resolveKeystorePath(username);
         if (ksPath == null) {
-            throw new Exception("KeyStore file not found for user: " + username);
+            Path expectedPath = ClientStoragePaths.keystoreFile(username);
+            throw new Exception("KeyStore file not found for user: " + username + 
+                ". Expected at: " + expectedPath.toAbsolutePath());
         }
 
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
@@ -156,10 +177,11 @@ public class PkiManager {
 
     private static Path resolveKeystorePath(String username) throws Exception {
         Path current = ClientStoragePaths.keystoreFile(username);
+        log.info("Checking keystore at: {}", current.toAbsolutePath());
         if (Files.isRegularFile(current)) {
             return current;
         }
-        Path legacy = Path.of("data/client", "keystore_" + username + ".p12");
+        Path legacy = PathUtil.resolve("data/client/keystore_" + username + ".p12");
         if (Files.isRegularFile(legacy)) {
             ClientStoragePaths.ensureUserDir(username);
             Files.copy(legacy, current, StandardCopyOption.REPLACE_EXISTING);

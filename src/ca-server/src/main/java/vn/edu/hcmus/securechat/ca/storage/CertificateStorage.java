@@ -193,6 +193,27 @@ public class CertificateStorage {
     }
 
     /**
+     * Kiểm tra xem clientId đã có chứng chỉ active (chưa revoke, chưa hết hạn) chưa.
+     * Dùng bởi RA để reject duplicate registration.
+     * clientId được extract từ CN trong subject_dn (CN=alice,O=SecureChat,C=VN → "alice").
+     */
+    public boolean hasActiveCertificate(String clientId) throws SQLException {
+        long nowMs = System.currentTimeMillis();
+        // Tìm cert có CN khớp clientId, chưa hết hạn, chưa revoke
+        return db.executeQueryAndProcess(
+            "SELECT ic.serial FROM issued_certificates ic " +
+            "LEFT JOIN revoked_certificates rc ON ic.serial = rc.serial " +
+            "WHERE ic.subject_dn LIKE ? " +
+            "AND ic.not_after > ? " +
+            "AND rc.serial IS NULL " +
+            "LIMIT 1",
+            rs -> rs.next(),
+            "CN=" + clientId + ",%",
+            nowMs
+        );
+    }
+
+    /**
      * DTO chứa thông tin chi tiết chứng chỉ.
      */
     public static class CertificateInfo {

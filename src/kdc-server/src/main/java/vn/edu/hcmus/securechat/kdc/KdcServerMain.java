@@ -32,6 +32,8 @@ import vn.edu.hcmus.securechat.kdc.service.AuthenticationService;
 import vn.edu.hcmus.securechat.kdc.service.OcspClient;
 import vn.edu.hcmus.securechat.kdc.service.TicketGrantingService;
 
+import vn.edu.hcmus.securechat.common.util.PathUtil;
+
 /**
  * KDC Server — Authentication Server (AS) + Ticket Granting Server (TGS).
  * Owner: Gia Hiển | Reviewer: Phú Thọ
@@ -87,7 +89,7 @@ public class KdcServerMain {
 
             // Khởi tạo Database và Storage
             vn.edu.hcmus.securechat.common.db.DatabaseManager db = new vn.edu.hcmus.securechat.common.db.DatabaseManager(
-                    "data/kdc-server.db");
+                    PathUtil.resolve("data/kdc-server.db").toString());
             vn.edu.hcmus.securechat.kdc.storage.KdcStorage storage = new vn.edu.hcmus.securechat.kdc.storage.KdcStorage(
                     db);
             storage.initializeTables();
@@ -153,6 +155,7 @@ public class KdcServerMain {
             switch (type) {
                 case TGT_REQUEST -> handleTgtRequest(frame, socket, clientAddr);
                 case ST_REQUEST -> handleStRequest(frame, socket, clientAddr);
+                case RENEW_TGT_REQUEST -> handleRenewTgtRequest(frame, socket, clientAddr);
                 default -> {
                     log.warn("[{}] Unexpected message type {} from {}", serverName, type, clientAddr);
                     sendErrorSafe(socket, "INVALID_MESSAGE_TYPE",
@@ -227,6 +230,25 @@ public class KdcServerMain {
     // ====================================================================
     // ST Request Handler — Ticket Granting Server (TGS)
     // ====================================================================
+
+    private void handleRenewTgtRequest(PacketFrame frame, Socket socket, String clientAddr) {
+        try {
+            vn.edu.hcmus.securechat.common.protocol.dto.RenewTgtRequest request = 
+                JsonSerializer.fromBytes(frame.getPayload(), vn.edu.hcmus.securechat.common.protocol.dto.RenewTgtRequest.class);
+
+            log.info("Processing RENEW_TGT request: clientId={}", request.getClientId());
+
+            TgtResponse response = authService.renewTgt(request, clientAddr);
+
+            byte[] responsePayload = JsonSerializer.toBytes(response);
+            PacketFrame.write(socket.getOutputStream(), MessageType.TGT_RESPONSE.getCode(), responsePayload);
+
+            log.info("Renewed TGT response sent to client={}", request.getClientId());
+        } catch (Exception e) {
+            log.error("RENEW_TGT rejected: {}", clientAddr, e);
+            sendErrorSafe(socket, "RENEW_FAILED", "Failed to renew TGT: " + e.getMessage());
+        }
+    }
 
     private void handleStRequest(PacketFrame frame, Socket socket, String clientAddr) {
         try {

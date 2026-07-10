@@ -34,12 +34,15 @@ public class PacketFrame {
     public static final byte TYPE_FILE_INIT = 0x11;
     /** Client gửi chunk nhị phân mã hóa của file. */
     public static final byte TYPE_FILE_CHUNK = 0x12;
-    /** Signaling WebRTC: SDP Offer (E2EE bọc ngoài). */
-    public static final byte TYPE_CALL_SDP_OFFER = 0x13;
-    /** Signaling WebRTC: SDP Answer (E2EE bọc ngoài). */
-    public static final byte TYPE_CALL_SDP_ANSWER = 0x14;
-    /** Signaling WebRTC: ICE Candidate (E2EE bọc ngoài). */
-    public static final byte TYPE_CALL_ICE_CANDIDATE = 0x15;
+
+    /** Client yêu cầu thu hồi chứng chỉ. */
+    public static final byte TYPE_REVOKE_REQUEST = 0x16;
+    /** Admin yêu cầu xem audit log (chỉ ADMIN). */
+    public static final byte TYPE_AUDIT_LOG_REQUEST  = 0x20;
+    /** Server trả audit log cho Admin. */
+    public static final byte TYPE_AUDIT_LOG_RESPONSE = 0x21;
+    /** Client yêu cầu gia hạn TGT (renewal). */
+    public static final byte TYPE_RENEW_TGT_REQUEST  = 0x22;
 
     public static final byte TYPE_ERROR = (byte) 0xFF;
 

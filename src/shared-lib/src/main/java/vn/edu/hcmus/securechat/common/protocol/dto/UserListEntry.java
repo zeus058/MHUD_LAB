@@ -19,14 +19,18 @@ public class UserListEntry {
     @JsonProperty("lastSeenAt")
     private long lastSeenAt;
 
+    @JsonProperty("displayName")
+    private String displayName;
+
     public UserListEntry() {
     }
 
-    public UserListEntry(String userId, boolean online, boolean preKeyAvailable, long lastSeenAt) {
+    public UserListEntry(String userId, boolean online, boolean preKeyAvailable, long lastSeenAt, String displayName) {
         this.userId = userId;
         this.online = online;
         this.preKeyAvailable = preKeyAvailable;
         this.lastSeenAt = lastSeenAt;
+        this.displayName = displayName;
     }
 
     public String getUserId() {
@@ -60,4 +64,7 @@ public class UserListEntry {
     public void setLastSeenAt(long lastSeenAt) {
         this.lastSeenAt = lastSeenAt;
     }
+
+    public String getDisplayName() { return displayName; }
+    public void setDisplayName(String displayName) { this.displayName = displayName; }
 }

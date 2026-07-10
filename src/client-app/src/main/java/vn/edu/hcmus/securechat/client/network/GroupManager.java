@@ -31,10 +31,11 @@ import vn.edu.hcmus.securechat.common.protocol.dto.GroupMessageDto;
  */
 public class GroupManager {
 
-    public static final int MIN_GROUP_MEMBERS = 3;
+    public static final int MIN_GROUP_MEMBERS = 2;
     public static final String CONTROL_GROUP_CREATED = "GROUP_CREATED";
     public static final String CONTROL_MEMBERS_UPDATED = "MEMBERS_UPDATED";
     public static final String CONTROL_MEMBER_REMOVED = "MEMBER_REMOVED";
+    public static final String CONTROL_GROUP_DELETED = "GROUP_DELETED";
 
     private static final Logger log = LoggerFactory.getLogger(GroupManager.class);
 
@@ -227,6 +228,11 @@ public class GroupManager {
             recipients.add(removedMemberId);
         }
         sendGroupControl(info, CONTROL_MEMBER_REMOVED, recipients, removedMemberId);
+    }
+
+    public void broadcastGroupDeleted(String groupId) throws IOException {
+        GroupInfo info = requireGroup(groupId);
+        sendGroupControl(info, CONTROL_GROUP_DELETED, recipientsExceptLocal(info.memberIds()), null);
     }
 
     public void removeGroup(String groupId) {

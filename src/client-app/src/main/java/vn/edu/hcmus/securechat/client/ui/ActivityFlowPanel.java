@@ -352,7 +352,7 @@ public class ActivityFlowPanel extends JPanel {
         return text.contains("tgt") || text.contains("st ") || text.contains("service ticket")
                 || text.contains("kerberos") || text.contains("handshake") || text.contains("pre-key")
                 || text.contains("e2ee init") || text.contains("ratchet") || text.contains("opk")
-                || text.contains("ml-kem") || text.contains("ecdhe") || text.contains("csr")
+                || text.contains("ecdhe") || text.contains("csr")
                 || text.contains("certificate") || text.contains("identity keypair")
                 || text.contains("proof-of-possession") || text.contains("keystore") || text.contains("session ready");
     }

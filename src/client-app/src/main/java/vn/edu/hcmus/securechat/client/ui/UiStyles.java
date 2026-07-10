@@ -193,7 +193,7 @@ public final class UiStyles {
         area.setCaretColor(UIConstants.SECURE_TEAL);
         area.setLineWrap(true);
         area.setWrapStyleWord(true);
-        area.setBorder(new EmptyBorder(10, 12, 10, 12));
+        area.setBorder(new EmptyBorder(7, 12, 7, 12));
         return area;
     }
 
@@ -206,20 +206,20 @@ public final class UiStyles {
         field.setSelectedTextColor(UIConstants.TEXT_WHITE);
         field.setBorder(BorderFactory.createCompoundBorder(
                 focusBorder(false),
-                new EmptyBorder(10, 12, 10, 12)));
+                new EmptyBorder(7, 12, 7, 12)));
         field.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override
             public void focusGained(java.awt.event.FocusEvent e) {
                 field.setBorder(BorderFactory.createCompoundBorder(
                         focusBorder(true),
-                        new EmptyBorder(10, 12, 10, 12)));
+                        new EmptyBorder(7, 12, 7, 12)));
             }
 
             @Override
             public void focusLost(java.awt.event.FocusEvent e) {
                 field.setBorder(BorderFactory.createCompoundBorder(
                         focusBorder(false),
-                        new EmptyBorder(10, 12, 10, 12)));
+                        new EmptyBorder(7, 12, 7, 12)));
             }
         });
     }
@@ -249,19 +249,55 @@ public final class UiStyles {
 
     private static JButton styledButton(String text, Color bg, Color fg, boolean filled) {
         JButton button = new JButton(text) {
+            private boolean hover = false;
+            {
+                addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override
+                    public void mouseEntered(java.awt.event.MouseEvent e) {
+                        hover = true;
+                        repaint();
+                    }
+                    @Override
+                    public void mouseExited(java.awt.event.MouseEvent e) {
+                        hover = false;
+                        repaint();
+                    }
+                });
+            }
+
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                
                 if (filled) {
-                    g2.setColor(bg);
+                    g2.setColor(hover ? bg.brighter() : bg);
                     g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 } else {
-                    g2.setColor(UIConstants.SURFACE_HIGH);
+                    g2.setColor(hover ? UIConstants.SURFACE_HIGH.brighter() : UIConstants.SURFACE_HIGH);
                     g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
-                    g2.setColor(UIConstants.OUTLINE);
-                    g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
                 }
+
+                // Mirror Glow effect on hover
+                if (hover) {
+                    java.awt.LinearGradientPaint glow = new java.awt.LinearGradientPaint(
+                        0, 0, getWidth(), getHeight(),
+                        new float[]{0f, 0.5f, 1f},
+                        new Color[]{
+                            new Color(255, 255, 255, 0),
+                            new Color(255, 255, 255, 45),
+                            new Color(255, 255, 255, 0)
+                        }
+                    );
+                    g2.setPaint(glow);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+                }
+
+                // Reflective Border
+                g2.setColor(hover ? Color.WHITE : UIConstants.GLASS_BORDER);
+                g2.setStroke(new java.awt.BasicStroke(hover ? 1.2f : 1.0f));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UIConstants.CORNER_RADIUS_SM, UIConstants.CORNER_RADIUS_SM);
+
                 g2.dispose();
                 super.paintComponent(g);
             }
@@ -281,9 +317,9 @@ public final class UiStyles {
     }
 
     public static RoundedPanel cardPanel() {
-        RoundedPanel panel = new RoundedPanel(UIConstants.CARD_BG, UIConstants.CORNER_RADIUS);
+        RoundedPanel panel = new RoundedPanel(UIConstants.GLASS_CARD, UIConstants.CORNER_RADIUS);
         panel.setBorder(BorderFactory.createCompoundBorder(
-                new RoundedLineBorder(UIConstants.OUTLINE, 1, UIConstants.CORNER_RADIUS),
+                new RoundedLineBorder(UIConstants.GLASS_BORDER, 1, UIConstants.CORNER_RADIUS),
                 new EmptyBorder(28, 28, 28, 28)));
         return panel;
     }

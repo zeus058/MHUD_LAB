@@ -19,7 +19,7 @@ public final class UIConstants {
     public static final Color TEXT_MUTED = Color.decode("#94A3B8");
     /** Viền phân vùng nhẹ trên nền tối */
     public static final Color BORDER_SUBTLE = Color.decode("#2D3748");
-    /** Các surface mở rộng theo template HTML trong thư mục template/. */
+
     public static final Color SURFACE = Color.decode("#0C141C");
     public static final Color PANEL_BG = Color.decode("#1A242D");
     public static final Color CARD_BG = Color.decode("#242F38");

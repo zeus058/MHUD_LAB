@@ -19,6 +19,9 @@ import vn.edu.hcmus.securechat.common.exception.PkiException;
 import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
+import vn.edu.hcmus.securechat.common.protocol.Role;
+import vn.edu.hcmus.securechat.common.protocol.dto.RenewTgtRequest;
+import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
@@ -124,6 +127,9 @@ public class AuthenticationService {
             new SecureRandom().nextBytes(sessionKey);
             String sessionKeyB64 = Base64.getEncoder().encodeToString(sessionKey);
 
+            // 5.5. Determine Role
+            Role role = determineRole(request.getClientId());
+
             // 6. Tạo TgtInner
             long now = Instant.now().getEpochSecond();
             long expiresAt = now + CryptoConstants.TGT_LIFETIME_SECONDS;
@@ -140,7 +146,8 @@ public class AuthenticationService {
                     sessionKeyB64,
                     true,   // renewable
                     TGT_CV,
-                    request.getCert()
+                    request.getCert(),
+                    role
             );
 
             // 7. Serialize TgtInner → JSON bytes
@@ -170,7 +177,16 @@ public class AuthenticationService {
                     clientCert.getPublicKey(), responseInnerBytes);
             String responseB64 = Base64.getEncoder().encodeToString(encryptedResponse);
 
-            // 12. Audit log và DB record
+            // 12. Server Proof (Mutual Authentication) — AS k\u00fd response b\u1eb1ng AS private key
+            // Client d\u00f9ng asCertificate \u0111\u1ec3 verify signature m\u00e0 kh\u00f4ng c\u1ea7n bi\u1ebft tr\u01b0\u1edbc
+            String dataToSign = request.getClientId() + "|" + request.getNonce() + "|" + responseB64;
+            java.security.Signature serverSig = java.security.Signature.getInstance("SHA256withRSA");
+            serverSig.initSign(keyManager.getAsPrivateKey());
+            serverSig.update(dataToSign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String serverSignature = Base64.getEncoder().encodeToString(serverSig.sign());
+            String asCertB64 = Base64.getEncoder().encodeToString(keyManager.getAsCertificate().getEncoded());
+
+            // 13. Audit log v\u00e0 DB record
             auditLog.info("TGT_ISSUED clientId={} ip={} issued={} expires={}",
                     request.getClientId(), clientIp, now, expiresAt);
             
@@ -191,11 +207,12 @@ public class AuthenticationService {
                 log.warn("Failed to record TGT issuance in storage or secure log chain", e);
             }
 
-            log.info("TGT issued for client={}, expires={}",
+            log.info("TGT issued for client={}, expires={} (mutual auth proof attached)",
                     request.getClientId(), Instant.ofEpochSecond(expiresAt));
             rateLimiter.recordSuccess("AS_CLIENT_FAILURE", request.getClientId());
 
-            return new TgtResponse(tgtB64, responseB64);
+            return new TgtResponse(tgtB64, responseB64, serverSignature, asCertB64);
+
 
         } catch (ProtocolException | vn.edu.hcmus.securechat.common.exception.PkiException | CryptoException e) {
             if (request != null) {
@@ -234,10 +251,137 @@ public class AuthenticationService {
             }
             throw new RuntimeException(e);
         } finally {
-            // Xóa session key khỏi bộ nhớ
+            // X\u00f3a session key kh\u1ecfi b\u1ed9 nh\u1edb
             if (sessionKey != null) Arrays.fill(sessionKey, (byte) 0);
         }
     }
+
+    public TgtResponse renewTgt(RenewTgtRequest request, String clientIp) throws Exception {
+        byte[] sessionKeyTgs = null;
+        byte[] newSessionKey = null;
+        
+        try {
+            rateLimiter.check("AS_RENEW_IP", clientIp, 20, Duration.ofMinutes(1));
+            
+            // 1. Gi\u1ea3i m\u00e3 oldTgt
+            byte[] encryptedOldTgt = Base64.getDecoder().decode(request.getOldTgt());
+            byte[] tgtBytes = HybridEncryption.decrypt(keyManager.getTgsPrivateKey(), encryptedOldTgt);
+            TgtInner oldTgt = JsonSerializer.fromBytes(tgtBytes, TgtInner.class);
+            
+            rateLimiter.checkFailureCooldown("AS_RENEW_FAILURE", oldTgt.getClientId());
+
+            if (!oldTgt.isRenewable()) {
+                throw new ProtocolException("TGT is not renewable");
+            }
+
+            long now = Instant.now().getEpochSecond();
+            if (now > oldTgt.getRenewTill()) {
+                throw new vn.edu.hcmus.securechat.common.exception.InvalidTicketException("TGT renew period has expired (renewTill = " + Instant.ofEpochSecond(oldTgt.getRenewTill()) + ")");
+            }
+
+            sessionKeyTgs = Base64.getDecoder().decode(oldTgt.getSessionKey());
+
+            // 2. Gi\u1ea3i m\u00e3 authenticator b\u1eb1ng K_A_TGS
+            byte[] encryptedAuth = Base64.getDecoder().decode(request.getAuthenticator());
+            byte[] authBytes = vn.edu.hcmus.securechat.common.crypto.AesGcmCipher.decrypt(sessionKeyTgs, encryptedAuth);
+            AuthenticatorJson auth = JsonSerializer.fromBytes(authBytes, AuthenticatorJson.class);
+
+            replayDefense.validateAuthenticator(auth);
+
+            if (!oldTgt.getClientId().equals(auth.getClientId()) || !oldTgt.getClientId().equals(request.getClientId())) {
+                throw new vn.edu.hcmus.securechat.common.exception.InvalidTicketException("ClientId mismatch in renew request");
+            }
+
+            // 3. PoP \u0111\u1ec3 ch\u1ee9ng minh ng\u01b0\u1eddi g\u1eedi th\u1ef1c s\u1ef1 c\u00f3 private key (trust on first use ho\u1eb7c \u0111\u1ecdc l\u1ea1i t\u1eeb DB/CA)
+            // L\u1ea5y cert t\u1eeb TGT c\u0169
+            byte[] clientCertDer = Base64.getDecoder().decode(oldTgt.getClientCert());
+            X509Certificate clientCert = keyManager.decodeCertificate(clientCertDer);
+            
+            // OCSP Check cert
+            String certSerial = clientCert.getSerialNumber().toString(16);
+            String issuerDn = clientCert.getIssuerX500Principal().getName();
+            try {
+                ocspClient.verifyCertificateStatus(certSerial, issuerDn);
+            } catch (CertificateRevokedException e) {
+                log.error("Certificate is revoked during renew: {}", e.getMessage());
+                throw e;
+            } catch (PkiException e) {
+                log.warn("OCSP check failed during renew (CA may be unavailable), continuing: {}", e.getMessage());
+            }
+
+            String dataToVerify = request.getOldTgt() + "|" + request.getAuthenticator() + "|" + request.getClientId();
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initVerify(clientCert.getPublicKey());
+            sig.update(dataToVerify.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] sigBytes = Base64.getDecoder().decode(request.getSignature());
+            if (!sig.verify(sigBytes)) {
+                throw new ProtocolException("RenewTgt request Proof-of-Possession signature verification failed");
+            }
+
+            // 4. Sinh new session key
+            newSessionKey = new byte[CryptoConstants.AES_KEY_SIZE_BYTES];
+            new SecureRandom().nextBytes(newSessionKey);
+            String sessionKeyB64 = Base64.getEncoder().encodeToString(newSessionKey);
+
+            // 5. T\u1ea1o new TGT
+            long expiresAt = now + CryptoConstants.TGT_LIFETIME_SECONDS;
+            String newTgtId = UUID.randomUUID().toString();
+
+            TgtInner newTgt = new TgtInner(
+                    newTgtId,
+                    oldTgt.getClientId(),
+                    oldTgt.getTargetTgs(),
+                    now,
+                    expiresAt,
+                    oldTgt.getRenewTill(), // gi\u1eef nguy\u00ean renewTill
+                    sessionKeyB64,
+                    true,
+                    TGT_CV,
+                    oldTgt.getClientCert(),
+                    oldTgt.getRole()
+            );
+
+            byte[] tgtInnerBytes = JsonSerializer.toBytes(newTgt);
+            byte[] encryptedTgt = HybridEncryption.encryptForWindowsKeyStoreRecipient(keyManager.getTgsPublicKey(), tgtInnerBytes);
+            String tgtB64 = Base64.getEncoder().encodeToString(encryptedTgt);
+
+            TgtResponseInner responseInner = new TgtResponseInner(
+                    sessionKeyB64,
+                    auth.getNonce(),
+                    oldTgt.getTargetTgs(),
+                    newTgtId,
+                    now,
+                    expiresAt,
+                    oldTgt.getRenewTill()
+            );
+
+            byte[] responseInnerBytes = JsonSerializer.toBytes(responseInner);
+            byte[] encryptedResponse = HybridEncryption.encrypt(clientCert.getPublicKey(), responseInnerBytes);
+            String responseB64 = Base64.getEncoder().encodeToString(encryptedResponse);
+
+            // Mutual auth
+            String dataToSign = request.getClientId() + "|" + auth.getNonce() + "|" + responseB64;
+            java.security.Signature serverSig = java.security.Signature.getInstance("SHA256withRSA");
+            serverSig.initSign(keyManager.getAsPrivateKey());
+            serverSig.update(dataToSign.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String serverSignature = Base64.getEncoder().encodeToString(serverSig.sign());
+            String asCertB64 = Base64.getEncoder().encodeToString(keyManager.getAsCertificate().getEncoded());
+
+            auditLog.info("TGT_RENEWED clientId={} ip={} issued={} expires={}", request.getClientId(), clientIp, now, expiresAt);
+            storage.recordTgtIssued(request.getClientId(), oldTgt.getTargetTgs(), now, expiresAt, clientIp, TGT_CV);
+            rateLimiter.recordSuccess("AS_RENEW_FAILURE", request.getClientId());
+
+            return new TgtResponse(tgtB64, responseB64, serverSignature, asCertB64);
+            
+        } catch (Exception e) {
+            rateLimiter.recordFailure("AS_RENEW_FAILURE", request != null ? request.getClientId() : "UNKNOWN", 5, Duration.ofMinutes(15));
+            throw e;
+        } finally {
+            if (sessionKeyTgs != null) Arrays.fill(sessionKeyTgs, (byte) 0);
+            if (newSessionKey != null) Arrays.fill(newSessionKey, (byte) 0);
+        }
+    }
+
 
     /**
      * Validate TGT request fields.
@@ -255,5 +399,12 @@ public class AuthenticationService {
         if (request.getCert() == null || request.getCert().isBlank()) {
             throw new ProtocolException("TGT request missing client certificate");
         }
+    }
+
+    private Role determineRole(String clientId) {
+        if (clientId != null && (clientId.toLowerCase().contains("admin") || clientId.equalsIgnoreCase("admin@example.com"))) {
+            return Role.ADMIN;
+        }
+        return Role.USER;
     }
 }

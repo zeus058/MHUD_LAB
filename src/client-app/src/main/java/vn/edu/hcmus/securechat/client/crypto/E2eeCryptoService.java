@@ -149,8 +149,22 @@ public class E2eeCryptoService {
 
             this.currentUsername = username;
             this.masterSessionKey = Arrays.copyOf(sessionKey, sessionKey.length);
+            
+            String displayName = "";
+            X509Certificate cert = vn.edu.hcmus.securechat.client.crypto.PkiManager.getCertificate();
+            if (cert != null) {
+                String dn = cert.getSubjectX500Principal().getName();
+                for (String part : dn.split(",")) {
+                    part = part.trim();
+                    if (part.startsWith("OU=")) {
+                        displayName = part.substring(3);
+                        break;
+                    }
+                }
+            }
+            
             ChatHandshakeRequest payload = new ChatHandshakeRequest(
-                    stBase64, authenticatorB64, null, null);
+                    stBase64, authenticatorB64, null, null, displayName);
 
             chatSocket = new Socket(ServerConfig.CHAT_HOST, ServerConfig.CHAT_PORT);
             chatSocket.setSoTimeout(ServerConfig.READ_TIMEOUT_MS);
@@ -230,6 +244,20 @@ public class E2eeCryptoService {
         byte[] plain = AesGcmCipher.decrypt(masterSessionKey, encrypted);
         try {
             return JsonSerializer.fromBytes(plain, ChatMessage.class);
+        } finally {
+            zero(encrypted);
+            zero(plain);
+        }
+    }
+
+    public String decryptSystemMessage(EncryptedChatEnvelope envelope) throws CryptoException {
+        if (!"SYSTEM".equals(envelope.getSenderId())) {
+            throw new CryptoException("Not a SYSTEM message");
+        }
+        byte[] encrypted = Base64.getDecoder().decode(envelope.getPayload());
+        byte[] plain = AesGcmCipher.decrypt(masterSessionKey, encrypted);
+        try {
+            return new String(plain, java.nio.charset.StandardCharsets.UTF_8);
         } finally {
             zero(encrypted);
             zero(plain);

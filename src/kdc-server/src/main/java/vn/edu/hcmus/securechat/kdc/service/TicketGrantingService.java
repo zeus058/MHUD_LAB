@@ -20,6 +20,7 @@ import vn.edu.hcmus.securechat.common.crypto.RateLimitService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
+import vn.edu.hcmus.securechat.common.protocol.Role;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.StRequest;
@@ -166,15 +167,23 @@ public class TicketGrantingService {
                     expiresAt,
                     sessionKeyChatB64,
                     ControlVector.ST_CV,
-                    clientCert.getSerialNumber().toString(16)
+                    clientCert.getSerialNumber().toString(16),
+                    tgtInner.getRole()
             );
 
             // 12. Serialize StInner → JSON bytes
             byte[] stInnerBytes = JsonSerializer.toBytes(stInner);
 
-            // 13. Hybrid Encrypt StInner bằng PU_ChatServer
+            // 13. Hybrid Encrypt StInner bằng PU_TargetServer
+            java.security.PublicKey targetPublicKey;
+            if (vn.edu.hcmus.securechat.common.config.ServerConfig.NOTIFICATION_SERVICE_ID.equals(request.getTargetServer())) {
+                targetPublicKey = keyManager.getNotificationServerPublicKey();
+            } else {
+                targetPublicKey = keyManager.getChatServerPublicKey();
+            }
+
             byte[] encryptedSt = HybridEncryption.encryptForWindowsKeyStoreRecipient(
-                    keyManager.getChatServerPublicKey(), stInnerBytes);
+                    targetPublicKey, stInnerBytes);
             String stB64 = Base64.getEncoder().encodeToString(encryptedSt);
 
             // 14. Tạo StResponseInner (chứa K_A_Chat cho Client)
@@ -194,7 +203,7 @@ public class TicketGrantingService {
             byte[] encryptedResponse = AesGcmCipher.encrypt(sessionKeyTgs, responseInnerBytes);
             String responseB64 = Base64.getEncoder().encodeToString(encryptedResponse);
 
-            // 17. Audit log và DB record
+            // 17. Audit log v\u00e0 DB record
             auditLog.info("ST_ISSUED clientId={} targetServer={} ip={} issued={} expires={}",
                     tgtInner.getClientId(), request.getTargetServer(),
                     clientIp, now, expiresAt);
@@ -216,12 +225,21 @@ public class TicketGrantingService {
                 log.warn("Failed to record ST issuance in storage or secure log chain", e);
             }
 
-            log.info("ST issued for client={}, target={}, expires={}",
+            // 18. Server Proof (Mutual Authentication) — TGS k\u00fd response b\u1eb1ng TGS private key
+            String dataToSignTgs = tgtInner.getClientId() + "|" + authenticator.getNonce() + "|" + responseB64;
+            java.security.Signature serverSig = java.security.Signature.getInstance("SHA256withRSA");
+            serverSig.initSign(keyManager.getTgsPrivateKey());
+            serverSig.update(dataToSignTgs.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String serverSignature = Base64.getEncoder().encodeToString(serverSig.sign());
+            String tgsCertB64 = Base64.getEncoder().encodeToString(keyManager.getTgsCertificate().getEncoded());
+
+            log.info("ST issued for client={}, target={}, expires={} (mutual auth proof attached)",
                     tgtInner.getClientId(), request.getTargetServer(),
                     Instant.ofEpochSecond(expiresAt));
             rateLimiter.recordSuccess("TGS_CLIENT_FAILURE", tgtInner.getClientId());
 
-            return new StResponse(stB64, responseB64);
+            return new StResponse(stB64, responseB64, serverSignature, tgsCertB64);
+
 
         } catch (ProtocolException | CryptoException e) {
             rateLimiter.recordFailure("TGS_CLIENT_FAILURE", rateClientId, 5, Duration.ofMinutes(15));

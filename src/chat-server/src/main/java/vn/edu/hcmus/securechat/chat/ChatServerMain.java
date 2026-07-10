@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import vn.edu.hcmus.securechat.chat.crypto.ChatKeyManager;
+import vn.edu.hcmus.securechat.chat.service.AccessControlService;
 import vn.edu.hcmus.securechat.chat.service.OcspStaplingManager;
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
@@ -41,6 +42,7 @@ import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.MessageType;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
+import vn.edu.hcmus.securechat.common.protocol.Role;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.ChatHandshakeResponse;
@@ -56,7 +58,6 @@ import vn.edu.hcmus.securechat.common.protocol.dto.UserListEntry;
 import vn.edu.hcmus.securechat.common.protocol.dto.GroupMessageDto;
 import vn.edu.hcmus.securechat.common.protocol.dto.FileMetadataDto;
 import vn.edu.hcmus.securechat.common.protocol.dto.FileChunkDto;
-import vn.edu.hcmus.securechat.common.protocol.dto.CallSignalDto;
 
 /**
  * Chat Server - routes encrypted E2EE messages between authenticated clients.
@@ -76,6 +77,7 @@ public class ChatServerMain {
     private final Map<Socket, Object> socketWriteLocks = new ConcurrentHashMap<>();
     private final Map<String, PreKeyBundle> preKeyBundles = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeenAtByClient = new ConcurrentHashMap<>();
+    private final Map<String, String> userNames = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
     
@@ -171,7 +173,7 @@ public class ChatServerMain {
                     // === Tính năng mới ===
                     case GROUP_MESSAGE -> handleGroupMessage(frame, socket, clientAddr);
                     case FILE_INIT, FILE_CHUNK -> handleFileTransfer(frame, socket, clientAddr);
-                    case CALL_SDP_OFFER, CALL_SDP_ANSWER, CALL_ICE_CANDIDATE -> handleCallSignal(frame, socket, clientAddr);
+                    case AUDIT_LOG_REQUEST -> handleAuditLogRequest(frame, socket, clientAddr);
                     default -> {
                         log.warn("Unexpected message type {} from {}", type, clientAddr);
                         sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Unexpected message type");
@@ -218,7 +220,8 @@ public class ChatServerMain {
                     socket,
                     Arrays.copyOf(masterSessionKey, masterSessionKey.length),
                     serviceTicket.getExpiresAt(),
-                    Instant.now().getEpochSecond());
+                    Instant.now().getEpochSecond(),
+                    serviceTicket.getRole());
 
             ClientSession previous = activeSessions.put(clientId, session);
             if (previous != null && previous.socket() != socket) {
@@ -226,6 +229,10 @@ public class ChatServerMain {
             }
             clientIdsBySocket.put(socket, clientId);
             lastSeenAtByClient.put(clientId, Instant.now().getEpochSecond());
+            
+            if (request.getDisplayName() != null && !request.getDisplayName().isBlank()) {
+                userNames.put(clientId, request.getDisplayName());
+            }
 
             String ecdhePubKeyBase64 = EcdheService.encodePublicKey(ecdhePair.getPublic());
             String accessTicket = createAccessTicket(serviceTicket, auth);
@@ -444,6 +451,50 @@ public class ChatServerMain {
         }
     }
 
+    private void handleAuditLogRequest(PacketFrame frame, Socket socket, String clientAddr) {
+        String clientId = clientIdsBySocket.get(socket);
+        if (clientId == null) {
+            sendError(socket, ErrorResponse.ERR_UNAUTHORIZED, "Not authenticated");
+            return;
+        }
+        ClientSession session = activeSessions.get(clientId);
+        if (session == null) {
+            sendError(socket, ErrorResponse.ERR_UNAUTHORIZED, "Session not found");
+            return;
+        }
+        
+        try {
+            AccessControlService.requireAdminForAuditLog(session.role());
+            
+            // Đọc file log
+            String logPath = vn.edu.hcmus.securechat.common.util.PathUtil.resolve("data/secure_audit.log").toString();
+            java.util.List<String> lines;
+            if (java.nio.file.Files.exists(java.nio.file.Path.of(logPath))) {
+                lines = java.nio.file.Files.readAllLines(java.nio.file.Path.of(logPath), java.nio.charset.StandardCharsets.UTF_8);
+            } else {
+                lines = java.util.Collections.singletonList("Log file not found or empty.");
+            }
+            
+            // Trả 100 dòng cuối
+            int start = Math.max(0, lines.size() - 100);
+            String content = String.join("\n", lines.subList(start, lines.size()));
+            
+            byte[] encrypted = AesGcmCipher.encrypt(session.sessionKey(), content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope env = 
+                new vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope("SYSTEM", Base64.getEncoder().encodeToString(encrypted));
+            
+            writeFrame(socket, PacketFrame.TYPE_AUDIT_LOG_RESPONSE, JsonSerializer.toBytes(env));
+            
+            auditLog.info("AUDIT_LOG_ACCESSED clientId={} ip={}", clientId, clientAddr);
+        } catch (vn.edu.hcmus.securechat.common.exception.ProtocolException e) {
+            sendError(socket, ErrorResponse.ERR_FORBIDDEN, e.getMessage());
+            auditLog.warn("AUDIT_LOG_ACCESS_DENIED clientId={} ip={} reason={}", clientId, clientAddr, e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to read audit log for {}", clientId, e);
+            sendError(socket, ErrorResponse.ERR_INTERNAL, e.getMessage());
+        }
+    }
+
     private void handlePreKeyRequest(PacketFrame frame, Socket socket) {
         ClientSession requester = sessionFor(socket);
         if (requester == null) {
@@ -518,7 +569,7 @@ public class ChatServerMain {
     }
 
     // =========================================================================
-    // === Tính năng mới: Group Chat, File Transfer, Call Signaling ============
+    // === Tính năng mới: Group Chat, File Transfer ============================
     // =========================================================================
 
     /**
@@ -637,44 +688,6 @@ public class ChatServerMain {
         }
     }
 
-    /**
-     * Xử lý WebRTC Call Signaling (CALL_SDP_OFFER/ANSWER/ICE).
-     * Giống E2EE_INIT: chỉ forward nguyên gói tới callee — Server zero-knowledge.
-     */
-    private void handleCallSignal(PacketFrame frame, Socket socket, String clientAddr) {
-        ClientSession sender = sessionFor(socket);
-        if (sender == null) {
-            sendError(socket, ErrorResponse.ERR_AUTH_FAILED, "Handshake required");
-            return;
-        }
-        try {
-            CallSignalDto signal = JsonSerializer.fromBytes(frame.getPayload(), CallSignalDto.class);
-            if (signal == null || isBlank(signal.getCallerId()) || isBlank(signal.getCalleeId())) {
-                throw new ProtocolException("CallSignalDto missing callerId or calleeId");
-            }
-            if (!Objects.equals(sender.clientId(), signal.getCallerId())) {
-                throw new ProtocolException("Call signal caller mismatch");
-            }
-
-            String targetId = signal.getCalleeId();
-            ClientSession callee = activeSessions.get(targetId);
-            if (callee == null || callee.socket().isClosed()) {
-                // Peer offline — tín hiệu gọi không thể đợi
-                sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Callee is offline");
-                auditLog.warn("CALL_SIGNAL_DROPPED callId={} caller={} callee={} reason=OFFLINE",
-                        signal.getCallId(), signal.getCallerId(), signal.getCalleeId());
-            } else {
-                writeFrame(callee.socket(), frame.getType(), frame.getPayload());
-                auditLog.info("CALL_SIGNAL_FORWARDED callId={} caller={} callee={} type={} ip={}",
-                        signal.getCallId(), signal.getCallerId(), signal.getCalleeId(),
-                        signal.getSignalType(), clientAddr);
-            }
-        } catch (ProtocolException | IOException e) {
-            log.warn("handleCallSignal failed from {}", clientAddr, e);
-            sendError(socket, ErrorResponse.ERR_BAD_REQUEST, "Invalid call signal");
-        }
-    }
-
     private String createAccessTicket(StInner st, AuthenticatorJson auth)
             throws CryptoException, ProtocolException {
         if (ticketServerKey == null) {
@@ -686,13 +699,16 @@ public class ChatServerMain {
         String deviceBinding = isBlank(auth.getChannelBinding())
                 ? "unbound:" + st.getClientId()
                 : auth.getChannelBinding();
+        
+        java.util.List<String> permissions = determinePermissions(st.getRole());
+        
         SessionTicket ticket = new SessionTicket(
                 st.getClientId(),
                 deviceBinding,
                 stId,
                 now,
                 expiresAt,
-                java.util.List.of("chat.send", "chat.recv", "prekey.upload"));
+                permissions);
         byte[] plaintext = null;
         byte[] encrypted = null;
         try {
@@ -765,6 +781,26 @@ public class ChatServerMain {
             throw new InvalidTicketException("Authenticator client mismatch");
         }
         replayDefense.validateAuthenticator(auth);
+    }
+
+    private java.util.List<String> determinePermissions(Role role) {
+        if (role == null) return java.util.List.of("chat.send", "chat.recv");
+        
+        java.util.List<String> perms = new java.util.ArrayList<>();
+        perms.add("chat.send");
+        perms.add("chat.recv");
+        perms.add("prekey.upload");
+        
+        if (role == Role.ADMIN) {
+            perms.add("user.manage");
+            perms.add("cert.revoke");
+            perms.add("server.manage");
+        } else if (role == Role.MODERATOR) {
+            perms.add("user.kick");
+            perms.add("chat.monitor");
+        }
+        
+        return perms;
     }
 
     private byte[] deriveMasterKeyIfPresent(ChatHandshakeRequest request, byte[] ticketSessionKey, KeyPair ecdhePair)
@@ -910,7 +946,8 @@ public class ChatServerMain {
             long lastSeenAt = online && session != null
                     ? session.establishedAt()
                     : lastSeenAtByClient.getOrDefault(userId, 0L);
-            users.add(new UserListEntry(userId, online, preKeyAvailable, lastSeenAt));
+            String displayName = userNames.get(userId);
+            users.add(new UserListEntry(userId, online, preKeyAvailable, lastSeenAt, displayName));
         }
         try {
             byte[] payload = JsonSerializer.toBytes(users);
@@ -967,7 +1004,8 @@ public class ChatServerMain {
             Socket socket,
             byte[] sessionKey,
             long expiresAt,
-            long establishedAt) {
+            long establishedAt,
+            Role role) {
 
         String sessionId() {
             return Integer.toHexString(System.identityHashCode(socket));

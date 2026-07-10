@@ -13,9 +13,11 @@ import org.slf4j.LoggerFactory;
 
 import vn.edu.hcmus.securechat.ca.service.CertificateAuthority;
 import vn.edu.hcmus.securechat.ca.service.OcspResponder;
+import vn.edu.hcmus.securechat.ca.service.RegistrationAuthority;
 import vn.edu.hcmus.securechat.ca.storage.CertificateStorage;
 import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.db.DatabaseManager;
+import vn.edu.hcmus.securechat.common.util.PathUtil;
 import vn.edu.hcmus.securechat.common.exception.FramingException;
 import vn.edu.hcmus.securechat.common.exception.ProtocolException;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
@@ -26,6 +28,7 @@ import vn.edu.hcmus.securechat.common.protocol.dto.CertificateSigningRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.ErrorResponse;
 import vn.edu.hcmus.securechat.common.protocol.dto.OcspRequest;
 import vn.edu.hcmus.securechat.common.protocol.dto.OcspResponse;
+import vn.edu.hcmus.securechat.common.protocol.dto.RevokeRequest;
 
 /**
  * CA Server — Máy chủ PKI cấp phát và thu hồi chứng chỉ X.509 v3.
@@ -51,6 +54,7 @@ public class CaServerMain {
     private CertificateStorage certStorage;
     private CertificateAuthority ca;
     private OcspResponder ocspResponder;
+    private RegistrationAuthority ra;
     private com.sun.net.httpserver.HttpServer adminHttpServer;
 
     public CaServerMain() {
@@ -70,7 +74,7 @@ public class CaServerMain {
 
         try {
             // Khởi tạo database
-            databaseManager = new DatabaseManager("data/ca-server.db");
+            databaseManager = new DatabaseManager(PathUtil.resolve("data/ca-server.db").toString());
             databaseManager.connect();
 
             // Khởi tạo storage
@@ -79,6 +83,10 @@ public class CaServerMain {
 
             // Khởi tạo Certificate Authority
             ca = new CertificateAuthority();
+
+            // Khởi tạo Registration Authority (RA) — tầng validation trước CA
+            ra = new RegistrationAuthority(ca, certStorage);
+            log.info("Registration Authority (RA) initialized");
 
             // Khởi tạo OCSP Responder
             // Dùng CA's private key và certificate làm OCSP signer
@@ -177,6 +185,7 @@ public class CaServerMain {
             switch (type) {
                 case CSR_REQUEST -> handleCsrRequest(frame, socket);
                 case OCSP_REQUEST -> handleOcspRequest(frame, socket);
+                case REVOKE_REQUEST -> handleRevokeRequest(frame, socket);
                 default -> {
                     log.warn("Unexpected message type {} from {}", type, clientAddr);
                     try {
@@ -214,8 +223,9 @@ public class CaServerMain {
             byte[] pubKeyDer = Base64.getDecoder().decode(csr.getPublicKey());
             PublicKey subjectPublicKey = decodePublicKey(pubKeyDer);
 
-            // 4. Cấp chứng chỉ
-            byte[] certificateDer = ca.issueCertificate(csr.getSubjectDn(), subjectPublicKey);
+            // 4. Cấp chứng chỉ qua Registration Authority (RA) — validate policy trước
+            String clientIp = socket.getRemoteSocketAddress().toString();
+            byte[] certificateDer = ra.processCsrRequest(csr, clientIp, subjectPublicKey);
             java.security.cert.X509Certificate cert = (java.security.cert.X509Certificate) 
                 java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(
                     new java.io.ByteArrayInputStream(certificateDer));
@@ -261,17 +271,22 @@ public class CaServerMain {
 
         } catch (IOException | ProtocolException e) {
             log.error("Error handling CSR Request", e);
-            auditLog.error("CSR_REQUEST_FAILED error={}", e.getMessage());
+            // Kiểm tra nếu là RA rejection
+            String errCode = e.getMessage() != null && e.getMessage().startsWith("RA_REJECTED")
+                    ? "RA_REJECTED" : "CSR_PROCESSING_FAILED";
+            auditLog.error("CSR_REQUEST_FAILED errorCode={} error={}", errCode, e.getMessage());
             try {
-                sendErrorResponse(socket, "CSR_PROCESSING_FAILED", e.getMessage());
+                sendErrorResponse(socket, errCode, e.getMessage());
             } catch (IOException | ProtocolException sendError) {
                 log.error("Failed to send error response", sendError);
             }
         } catch (Exception e) {
             log.error("Error handling CSR Request", e);
-            auditLog.error("CSR_REQUEST_FAILED error={}", e.getMessage());
+            String errCode = e.getMessage() != null && e.getMessage().startsWith("RA_REJECTED")
+                    ? "RA_REJECTED" : "CSR_PROCESSING_FAILED";
+            auditLog.error("CSR_REQUEST_FAILED errorCode={} error={}", errCode, e.getMessage());
             try {
-                sendErrorResponse(socket, "CSR_PROCESSING_FAILED", e.getMessage());
+                sendErrorResponse(socket, errCode, e.getMessage());
             } catch (IOException | ProtocolException sendError) {
                 log.error("Failed to send error response", sendError);
             }
@@ -319,6 +334,55 @@ public class CaServerMain {
             } catch (IOException | ProtocolException sendError) {
                 log.error("Failed to send error response", sendError);
             }
+        }
+    }
+
+    // ====================================================================
+    // Revocation Request Handler — Thu hồi chứng chỉ từ client
+    // ====================================================================
+
+    private void handleRevokeRequest(PacketFrame frame, Socket socket) {
+        try {
+            log.info("Processing Revoke Request");
+
+            // 1. Deserialize request
+            RevokeRequest req = JsonSerializer.fromBytes(frame.getPayload(), RevokeRequest.class);
+
+            // 2. Lấy chứng chỉ từ storage để lấy Public Key
+            java.util.Optional<byte[]> certBytes = certStorage.getCertificateBySerial(req.getCertSerial());
+            if (certBytes.isEmpty()) {
+                throw new ProtocolException("Certificate not found: " + req.getCertSerial());
+            }
+
+            java.security.cert.X509Certificate cert = (java.security.cert.X509Certificate)
+                java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(
+                    new java.io.ByteArrayInputStream(certBytes.get()));
+
+            // 3. Xác minh chữ ký (Proof-of-Possession)
+            String dataToVerify = req.getClientId() + "|" + req.getCertSerial() + "|" + req.getReason();
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initVerify(cert.getPublicKey());
+            sig.update(dataToVerify.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] sigBytes = Base64.getDecoder().decode(req.getSignature());
+
+            if (!sig.verify(sigBytes)) {
+                throw new ProtocolException("Revocation request signature verification failed");
+            }
+
+            // 4. Thực hiện thu hồi
+            certStorage.revokeCertificate(req.getCertSerial(), req.getReason());
+
+            // 5. Gửi thành công (reuse CERT_RESPONSE or send empty with success code)
+            PacketFrame.write(socket.getOutputStream(), MessageType.CERT_RESPONSE.getCode(), "{\"status\":\"REVOKED\"}".getBytes());
+
+            log.info("Certificate revoked successfully: serial={}", req.getCertSerial());
+            auditLog.info("CERT_REVOKED_BY_CLIENT clientId={} serial={}", req.getClientId(), req.getCertSerial());
+
+        } catch (Exception e) {
+            log.error("Error handling Revoke Request", e);
+            try {
+                sendErrorResponse(socket, "REVOCATION_FAILED", e.getMessage());
+            } catch (Exception ignored) {}
         }
     }
 
