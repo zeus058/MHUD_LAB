@@ -3,7 +3,7 @@
 
 ---
 
-## 1. Thông tin nhóm phát triển
+## 1. Thông tin nhóm phát triển & Phân công nhiệm vụ
 
 | STT | Họ và Tên | MSSV | Vai trò chính | Tỷ lệ đóng góp |
 | :---: | :--- | :---: | :--- | :---: |
@@ -11,6 +11,34 @@
 | 2 | **Anh Tuấn** | 23120184 | CA Server, PKI Workflow, OCSP | 25% |
 | 3 | **Phú Thọ** | 23120169 | Chat Server, Network Protocol, Routing | 25% |
 | 4 | **Trúc Ngọc** | 23120148 | UI/UX Swing, Client Integration, Testing | 25% |
+
+### Bảng phân rã chi tiết công việc của các thành viên:
+
+#### 1. Gia Hiển (23120123) - Nhóm trưởng, Core Cryptography & KDC Developer
+*   **Thiết kế kiến trúc hệ thống:** Lên ý tưởng, định hình mô hình tương tác giữa Client - CA - KDC - Chat Server.
+*   **Core Cryptography (shared-lib):** Xây dựng lõi mật mã đối xứng AES-256-GCM (đảm bảo tính bí mật và toàn vẹn), chữ ký số ECDSA (xác thực danh tính) và giao thức bắt tay trao đổi khóa Diffie-Hellman tạm thời (ECDHE) qua khóa Elliptic Curve.
+*   **KDC Server (kdc-server):**
+    *   **Cổng AS (Authentication Service):** Xác thực chữ ký số người dùng dựa trên mật khẩu và chứng chỉ số X.509, sinh khóa phiên tạm thời và cấp Vé nhận dạng (TGT).
+    *   **Cổng TGS (Ticket Granting Service):** Xác thực TGT và Authenticator nhận được từ Client để cấp Vé dịch vụ (Service Ticket - ST) kết nối Chat Server.
+*   **Cơ chế Chống Replay & Phân quyền:** Thiết kế cơ chế lọc Replay Attack sử dụng Nonce Cache kết hợp sai lệch Timestamp, tích hợp trường `Control Vector` vào ST để thực hiện phân quyền người dùng (Role-Based Access Control).
+
+#### 2. Anh Tuấn (23120184) - PKI Infrastructure & CA Developer
+*   **Thiết kế Root CA (ca-server):** Xây dựng hệ thống Certificate Authority để quản lý vòng đời chứng chỉ khóa công khai. Khởi tạo cặp khóa ECDSA cho CA và sinh tệp chứng chỉ Root CA tự ký tin cậy.
+*   **Certificate Authority Service:** Phát triển các API cho phép Client đăng ký tài khoản, gửi yêu cầu ký chứng chỉ số (CSR) và CA tự động cấp phát chứng chỉ định dạng X.509.
+*   **OCSP Responder:** Triển khai dịch vụ xác thực trạng thái chứng chỉ số trực tuyến qua giao thức OCSP (Online Certificate Status Protocol) giúp các Server (KDC, Chat) kiểm tra trạng thái chứng chỉ của Client theo thời gian thực.
+*   **Thu hồi chứng chỉ (Revocation System):** Xây dựng API gửi yêu cầu thu hồi (Revoke Request) kèm chữ ký số xác thực để hủy bỏ chứng chỉ khi người dùng bị lộ khóa bí mật hoặc thay đổi khóa.
+
+#### 3. Phú Thọ (23120169) - Chat Infrastructure & Network Protocol Engineer
+*   **Giao thức truyền dữ liệu (Network Protocol):** Định nghĩa cấu trúc khung gói tin `PacketFrame` để phân mảnh dữ liệu (Data Framing) bao gồm loại gói tin, mã hóa header, payload hỗ trợ truyền tin nhắn và gửi file dung lượng lớn.
+*   **Chat Server (chat-server):** Thiết lập kết nối TCP Socket đa luồng (Multi-threading), quản lý các kết nối trực tuyến (Active Session), định tuyến tin nhắn, xử lý hàng đợi tin nhắn và tạo kênh chat đôi, chat nhóm.
+*   **Notification Server (notification-server):** Xây dựng cổng dịch vụ đẩy thông báo sự kiện (Push Notification) thời gian thực tới Client (ví dụ: thông báo hệ thống, thông báo tin nhắn mới khi đang ở tab khác).
+*   **Tích hợp OCSP Stapling:** Thiết kế cơ chế kẹp trạng thái chứng chỉ OCSP trực tiếp vào handshake TLS/SSL để tối ưu hóa hiệu năng, giảm tải truy vấn lặp đi lặp lại lên CA Server.
+
+#### 4. Trúc Ngọc (23120148) - UI/UX Designer & Client Integration Tester
+*   **Thiết kế Giao diện người dùng (client-app):** Thiết kế toàn bộ giao diện bằng Java Swing hiện đại theo phong cách Figma (Darkmode sang trọng, Layout chia cột 64/36, hiệu ứng tương tác nút bấm, khung chat động và thanh thông báo tiến trình hoạt động Activity Flow).
+*   **Quản lý Khóa cục bộ & Client Crypto:** Tích hợp logic nạp/xuất khóa bảo mật từ tệp PKCS12 (`.pfx`) cục bộ tại Client, xây dựng cache quản lý vé tạm thời (Ticket Cache) tại Client để thực hiện Single Sign-On (SSO).
+*   **Tính năng Truyền File E2EE:** Thiết kế giao diện và xử lý logic chia tệp tin thành các khối chunk 512KB, mã hóa từng chunk bằng AES-GCM với khóa phiên sinh ngẫu nhiên (Zero-Knowledge) trước khi gửi qua Chat Server.
+*   **Kịch bản kiểm thử (JUnit Testing):** Xây dựng và thực thi 45 kịch bản kiểm thử tích hợp tự động kiểm tra tính chính xác của các thuật toán mã hóa, bắt tay Kerberos, xác thực OCSP và chống tấn công Replay.
 
 ---
 
