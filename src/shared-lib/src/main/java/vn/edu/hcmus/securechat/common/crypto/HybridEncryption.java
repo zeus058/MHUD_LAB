@@ -233,9 +233,6 @@ public final class HybridEncryption {
 
     private static List<String> providerPreference(Key key) {
         List<String> providers = new ArrayList<>();
-        if (key != null && key.getClass().getName().startsWith("sun.security.mscapi.")) {
-            providers.add("SunMSCAPI");
-        }
         providers.add(null);
         return providers;
     }

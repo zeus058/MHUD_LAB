@@ -20,7 +20,6 @@ import vn.edu.hcmus.securechat.common.crypto.RateLimitService;
 import vn.edu.hcmus.securechat.common.crypto.ReplayDefenseService;
 import vn.edu.hcmus.securechat.common.protocol.ControlVector;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
-import vn.edu.hcmus.securechat.common.protocol.Role;
 import vn.edu.hcmus.securechat.common.protocol.dto.AuthenticatorJson;
 import vn.edu.hcmus.securechat.common.protocol.dto.StInner;
 import vn.edu.hcmus.securechat.common.protocol.dto.StRequest;

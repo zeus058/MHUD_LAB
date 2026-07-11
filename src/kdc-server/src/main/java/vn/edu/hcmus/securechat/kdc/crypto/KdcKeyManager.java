@@ -1,15 +1,10 @@
 package vn.edu.hcmus.securechat.kdc.crypto;
 
 import java.io.ByteArrayInputStream;
-import java.io.FileInputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.UnrecoverableKeyException;
 import java.security.cert.CertPathValidator;
 import java.security.cert.CertPathValidatorException;
 import java.security.cert.CertificateFactory;
@@ -58,111 +53,48 @@ public final class KdcKeyManager {
     private final Set<TrustAnchor> trustAnchors;
 
     public KdcKeyManager() throws KeyStoreException, NoSuchAlgorithmException {
-        KeyStore personalStore = KeyStoreManager.loadPersonalStore();
-
-        // Load AS key pair (try Windows-MY first, then fallback to PFX file)
-        if (personalStore.containsAlias(AS_ALIAS)) {
-            asPrivateKey = loadPrivateKey(personalStore, AS_ALIAS);
-            asCertificate = loadCertificate(personalStore, AS_ALIAS);
-            log.info("Loaded AS cert from Windows-MY");
-        } else {
-            final PrivateKey[] k = new PrivateKey[1];
-            final X509Certificate[] c = new X509Certificate[1];
-            KeyStoreManager.loadFromPfxFallback(AS_ALIAS, (priv, cert) -> {
-                k[0] = priv;
-                c[0] = cert;
-            });
-            asPrivateKey = k[0];
-            asCertificate = c[0];
-            log.info("Loaded AS cert from fallback file");
-        }
+        // Load AS key pair
+        KeyStoreManager.KeyPairEntry asKeys = KeyStoreManager.loadKeyPair(AS_ALIAS);
+        asPrivateKey = asKeys.privateKey();
+        asCertificate = asKeys.certificate();
+        log.info("Loaded AS cert from PKCS12 file");
 
         // Load TGS key pair
-        if (personalStore.containsAlias(TGS_ALIAS)) {
-            tgsPrivateKey = loadPrivateKey(personalStore, TGS_ALIAS);
-            tgsCertificate = loadCertificate(personalStore, TGS_ALIAS);
-            log.info("Loaded TGS cert from Windows-MY");
-        } else {
-            final PrivateKey[] k = new PrivateKey[1];
-            final X509Certificate[] c = new X509Certificate[1];
-            KeyStoreManager.loadFromPfxFallback(TGS_ALIAS, (priv, cert) -> {
-                k[0] = priv;
-                c[0] = cert;
-            });
-            tgsPrivateKey = k[0];
-            tgsCertificate = c[0];
-            log.info("Loaded TGS cert from fallback file");
-        }
+        KeyStoreManager.KeyPairEntry tgsKeys = KeyStoreManager.loadKeyPair(TGS_ALIAS);
+        tgsPrivateKey = tgsKeys.privateKey();
+        tgsCertificate = tgsKeys.certificate();
+        log.info("Loaded TGS cert from PKCS12 file");
 
-        // Load Chat Server certificate (chỉ cần public key)
-        X509Certificate chatCert;
-        if (personalStore.containsAlias(CHAT_ALIAS)) {
-            chatCert = loadCertificate(personalStore, CHAT_ALIAS);
-            log.info("Loaded Chat cert from Windows-MY");
-        } else {
-            final X509Certificate[] tmp = new X509Certificate[1];
-            KeyStoreManager.loadFromPfxFallback(CHAT_ALIAS, (priv, cert) -> tmp[0] = cert);
-            chatCert = tmp[0];
-            log.info("Loaded Chat cert from fallback file");
-        }
-        chatServerPublicKey = chatCert.getPublicKey();
+        // Load Chat Server certificate (only public key is needed)
+        KeyStoreManager.KeyPairEntry chatKeys = KeyStoreManager.loadKeyPair(CHAT_ALIAS);
+        chatServerPublicKey = chatKeys.certificate().getPublicKey();
+        log.info("Loaded Chat cert from PKCS12 file");
 
         // Load Notification Server certificate
         X509Certificate notifCert;
-        if (personalStore.containsAlias(NOTIFICATION_ALIAS)) {
-            notifCert = loadCertificate(personalStore, NOTIFICATION_ALIAS);
-            log.info("Loaded Notification cert from Windows-MY");
-        } else {
-            final X509Certificate[] tmpNotif = new X509Certificate[1];
-            try {
-                KeyStoreManager.loadFromPfxFallback(NOTIFICATION_ALIAS, (priv, cert) -> tmpNotif[0] = cert);
-            } catch (Exception e) {
-                log.warn("Could not load notification cert, falling back to chat cert: {}", e.getMessage());
-                tmpNotif[0] = chatCert; // Fallback so KDC doesn't crash if cert isn't generated yet
-            }
-            notifCert = tmpNotif[0];
-            log.info("Loaded Notification cert from fallback file (or fallback)");
+        try {
+            KeyStoreManager.KeyPairEntry notifKeys = KeyStoreManager.loadKeyPair(NOTIFICATION_ALIAS);
+            notifCert = notifKeys.certificate();
+            log.info("Loaded Notification cert from PKCS12 file");
+        } catch (Exception e) {
+            log.warn("Could not load notification cert, falling back to chat cert: {}", e.getMessage());
+            notifCert = chatKeys.certificate(); // Fallback so KDC doesn't crash if cert isn't generated yet
         }
         notificationServerPublicKey = notifCert.getPublicKey();
 
         // Load CA Root certificate
-        if (personalStore.containsAlias(CA_ALIAS)) {
-            caCertificate = loadCertificate(personalStore, CA_ALIAS);
-            log.info("Loaded CA cert from Windows-MY");
-        } else {
-            final X509Certificate[] tmp = new X509Certificate[1];
-            KeyStoreManager.loadFromPfxFallback(CA_ALIAS, (priv, cert) -> tmp[0] = cert);
-            caCertificate = tmp[0];
-            log.info("Loaded CA cert from fallback file");
-        }
-        trustAnchors = Collections.singleton(new TrustAnchor(caCertificate, null));
+        KeyStoreManager.KeyPairEntry caKeys = KeyStoreManager.loadKeyPair(CA_ALIAS);
+        caCertificate = caKeys.certificate();
+        log.info("Loaded CA cert from PKCS12 file");
+        
+        trustAnchors = Collections.singleton(new java.security.cert.TrustAnchor(caCertificate, null));
 
         log.info("KDC Key Manager initialized: AS={}, TGS={}, Chat={}, Notif={}, CA={}",
                 asCertificate.getSubjectX500Principal().getName(),
                 tgsCertificate.getSubjectX500Principal().getName(),
-                chatCert.getSubjectX500Principal().getName(),
+                chatKeys.certificate().getSubjectX500Principal().getName(),
                 notifCert.getSubjectX500Principal().getName(),
                 caCertificate.getSubjectX500Principal().getName());
-    }
-
-    private PrivateKey loadPrivateKey(KeyStore ks, String alias) throws KeyStoreException {
-        try {
-            PrivateKey key = (PrivateKey) ks.getKey(alias, null);
-            if (key == null) {
-                throw new KeyStoreException("No private key found for alias: " + alias);
-            }
-            return key;
-        } catch (NoSuchAlgorithmException | UnrecoverableKeyException e) {
-            throw new KeyStoreException("Failed to load private key for: " + alias, e);
-        }
-    }
-
-    private X509Certificate loadCertificate(KeyStore ks, String alias) throws KeyStoreException {
-        java.security.cert.Certificate cert = ks.getCertificate(alias);
-        if (cert == null) {
-            throw new KeyStoreException("No certificate found for alias: " + alias);
-        }
-        return (X509Certificate) cert;
     }
 
     /**

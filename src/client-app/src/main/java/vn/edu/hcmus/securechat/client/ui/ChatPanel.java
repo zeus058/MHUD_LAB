@@ -50,6 +50,10 @@ import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.border.EmptyBorder;
+import javax.swing.JPopupMenu;
+import javax.swing.JMenuItem;
+
+import vn.edu.hcmus.securechat.client.db.LocalDatabase.MessageRecord;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,7 +116,9 @@ public class ChatPanel extends JPanel {
 
     private boolean rightRailOpen = true;
     private JPanel rightRail;
+    private JPanel reopenStrip;
     private JButton connHeaderBtn;
+    private JButton reopenRailBtn;
 
     // === Header Buttons ===
     private JButton membersBtn;
@@ -154,8 +160,25 @@ public class ChatPanel extends JPanel {
         chatWorkspace.add(buildSidebar(), BorderLayout.WEST);
         chatWorkspace.add(buildChatArea(), BorderLayout.CENTER);
 
+        // EAST wrapper: BorderLayout — rightRail in CENTER, thin reopen strip in WEST.
+        // When rightRail is hidden it collapses; strip becomes the only visible element (22px).
+        JPanel eastWrapper = new JPanel(new BorderLayout());
+        eastWrapper.setOpaque(false);
         rightRail = buildRightRail();
-        chatWorkspace.add(rightRail, BorderLayout.EAST);
+        eastWrapper.add(rightRail, BorderLayout.CENTER);
+        // Thin reopen strip (22 px wide, always present)
+        JPanel reopenStrip = new JPanel(new java.awt.GridBagLayout());
+        reopenStrip.setOpaque(false);
+        reopenStrip.setPreferredSize(new Dimension(22, 0));
+        reopenStrip.setVisible(false); // hidden while rightRail is open
+        reopenRailBtn = buildReopenRailButton();
+        reopenStrip.add(reopenRailBtn,
+                new java.awt.GridBagConstraints(0, 0, 1, 1, 1, 1,
+                        java.awt.GridBagConstraints.CENTER, java.awt.GridBagConstraints.BOTH,
+                        new java.awt.Insets(0, 0, 0, 0), 0, 0));
+        eastWrapper.add(reopenStrip, BorderLayout.WEST);
+        chatWorkspace.add(eastWrapper, BorderLayout.EAST);
+        this.reopenStrip = reopenStrip;
 
         add(chatWorkspace, BorderLayout.CENTER);
 
@@ -176,31 +199,6 @@ public class ChatPanel extends JPanel {
         g2.dispose();
     }
 
-    private JPanel buildHeader() {
-        JPanel header = new JPanel(new BorderLayout(18, 0));
-        header.setOpaque(true);
-        header.setBackground(UIConstants.SURFACE);
-        header.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, UIConstants.BORDER_SUBTLE),
-                new EmptyBorder(14, UIConstants.PADDING, 14, UIConstants.PADDING)));
-
-        JPanel titles = new JPanel();
-        titles.setOpaque(false);
-        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
-        JLabel appName = UiStyles.appTitleLabel("SecureChat");
-        JLabel userLine = UiStyles.mutedLabel("@" + username);
-        userLine.setForeground(UIConstants.TEXT_SILVER);
-        titles.add(appName);
-        titles.add(Box.createVerticalStrut(2));
-        titles.add(userLine);
-        header.add(titles, BorderLayout.WEST);
-
-        JButton logout = UiStyles.ghostButton("Log out");
-        logout.setPreferredSize(new Dimension(112, 38));
-        logout.addActionListener(e -> listener.onLogout());
-        header.add(logout, BorderLayout.EAST);
-        return header;
-    }
 
     private JPanel buildRightRail() {
         return new ConnectionInfoPanel();
@@ -273,15 +271,24 @@ public class ChatPanel extends JPanel {
         searchIconPanel.setPreferredSize(new Dimension(20, 0));
         openRow.add(searchIconPanel, BorderLayout.WEST);
 
-        contactField = new EmbeddedPlaceholderField("Search conversations");
+        contactField = new EmbeddedPlaceholderField("");
         contactField.setFont(UIConstants.FONT_BODY.deriveFont(14f));
         contactField.setForeground(UIConstants.TEXT_WHITE);
         contactField.setCaretColor(UIConstants.SECURE_TEAL);
         contactField.setOpaque(false);
         contactField.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 8));
         contactField.setToolTipText("Type a username and press Enter to open a conversation");
+        
+        // Real-time filtering when typing
+        contactField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { applyUserList(lastUserList); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { applyUserList(lastUserList); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { applyUserList(lastUserList); }
+        });
+        
         contactField.addActionListener(e -> openManualConversation());
         openRow.add(contactField, BorderLayout.CENTER);
+
 
         JButton open = new JButton("+") {
             private boolean hover = false;
@@ -555,11 +562,12 @@ public class ChatPanel extends JPanel {
         connHeaderBtn.setFocusPainted(false);
         connHeaderBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         connHeaderBtn.addActionListener(e -> {
-            rightRailOpen = !rightRailOpen;
-            rightRail.setVisible(rightRailOpen);
+            if (rightRailOpen) {
+                closeRightRail();
+            } else {
+                openRightRail();
+            }
             connHeaderBtn.repaint();
-            revalidate();
-            repaint();
         });
         // actionsRow.add(connHeaderBtn);
 
@@ -588,7 +596,70 @@ public class ChatPanel extends JPanel {
         return chat;
     }
 
+    // ===== Recent Activity Panel toggle helpers =====
+
+    private void openRightRail() {
+        rightRailOpen = true;
+        rightRail.setVisible(true);
+        if (reopenStrip != null) reopenStrip.setVisible(false);
+        revalidate();
+        repaint();
+    }
+
+    private void closeRightRail() {
+        rightRailOpen = false;
+        rightRail.setVisible(false);
+        if (reopenStrip != null) reopenStrip.setVisible(true);
+        revalidate();
+        repaint();
+    }
+
+    private JButton buildReopenRailButton() {
+        JButton btn = new JButton() {
+            private boolean hover = false;
+            {
+                addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override public void mouseEntered(java.awt.event.MouseEvent e) { hover = true; repaint(); }
+                    @Override public void mouseExited(java.awt.event.MouseEvent e)  { hover = false; repaint(); }
+                });
+                setOpaque(false);
+                setContentAreaFilled(false);
+                setBorderPainted(false);
+                setFocusPainted(false);
+                setText("");
+            }
+
+            @Override
+            public Dimension getPreferredSize() { return new Dimension(22, 80); }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                // Fully custom paint — no super call to avoid L&F text rendering
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Color bg = hover ? new Color(0, 161, 156, 220) : new Color(0, 161, 156, 160);
+                g2.setColor(bg);
+                // Left-rounded only: extend right edge beyond visible clip
+                g2.fillRoundRect(0, 0, getWidth() + 14, getHeight(), 14, 14);
+                // ← arrow
+                int cx = getWidth() / 2;
+                int cy = getHeight() / 2;
+                g2.setColor(Color.WHITE);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g2.drawLine(cx + 4, cy, cx - 3, cy);
+                g2.drawLine(cx - 3, cy, cx + 1, cy - 4);
+                g2.drawLine(cx - 3, cy, cx + 1, cy + 4);
+                g2.dispose();
+            }
+        };
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setToolTipText("Show Recent Activity");
+        btn.addActionListener(e -> openRightRail());
+        return btn;
+    }
+
     private JButton createHeaderButton(String iconName) {
+
         JButton btn = new JButton() {
             private boolean hover = false;
             {
@@ -792,27 +863,25 @@ public class ChatPanel extends JPanel {
     }
 
     private void openManualConversation() {
-        String peer = contactField.getText().trim();
-        if (peer.isEmpty()) {
+        String query = contactField.getText().trim();
+        if (query.isEmpty()) {
             contactField.requestFocusInWindow();
             return;
         }
-        if (peer.equals(username)) {
-            contactField.selectAll();
-            return;
-        }
-        ConversationItem item = findConversation(peer);
-        if (item == null) {
-            item = ConversationItem.manual(peer);
-            addConversation(item);
-        }
-        contactField.setText("");
-        selectPeer(item);
-        updatingUserList = true;
-        try {
-            selectListItem(peer);
-        } finally {
-            updatingUserList = false;
+        
+        // Select the first matching conversation from the filtered list, if available
+        if (userListModel.getSize() > 0) {
+            ConversationItem topItem = userListModel.getElementAt(0);
+            if (!topItem.placeholder) {
+                contactField.setText(""); // clear search
+                selectPeer(topItem);
+                updatingUserList = true;
+                try {
+                    selectListItem(topItem.userId);
+                } finally {
+                    updatingUserList = false;
+                }
+            }
         }
     }
 
@@ -857,9 +926,27 @@ public class ChatPanel extends JPanel {
                 javax.swing.JOptionPane.YES_NO_OPTION,
                 javax.swing.JOptionPane.WARNING_MESSAGE);
         if (confirm == javax.swing.JOptionPane.YES_OPTION) {
-            groupManager.removeGroup(selectedPeer);
-            clearActiveChat();
-            applyUserList(lastUserList);
+            String sel = selectedPeer;
+            new SwingWorker<Void, Void>() {
+                @Override
+                protected Void doInBackground() throws Exception {
+                    try {
+                        groupManager.broadcastGroupDeleted(sel);
+                    } catch (Exception e) {
+                        log.warn("Failed to broadcast group deleted", e);
+                    }
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    groupManager.removeGroup(sel);
+                    if (selectedPeer != null && selectedPeer.equals(sel)) {
+                        clearActiveChat();
+                    }
+                    applyUserList(lastUserList);
+                }
+            }.execute();
         }
     }
 
@@ -979,7 +1066,6 @@ public class ChatPanel extends JPanel {
                 display.isGroup = true;
                 display.groupOnlineCount = onlineMemberCount(group);
                 display.groupMemberCount = group.memberIds() == null ? 0 : group.memberIds().size();
-                display.leaderId = group.leaderId();
             }
         }
         if (display == null) {
@@ -1002,28 +1088,28 @@ public class ChatPanel extends JPanel {
         messageContainer.removeAll();
         this.messageCount = 0;
         if (selectedPeer != null && localDb != null) {
-            java.util.List<ChatMessage> msgs = localDb.loadMessages(username, selectedPeer);
-            for (ChatMessage msg : msgs) {
-                boolean outgoing = msg.getSenderId().equals(username);
-                String time = Instant.ofEpochSecond(msg.getSentAt())
+            java.util.List<MessageRecord> msgs = localDb.loadMessages(username, selectedPeer);
+            for (MessageRecord msg : msgs) {
+                boolean outgoing = msg.sender().equals(username);
+                String time = Instant.ofEpochSecond(msg.timestamp())
                         .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
-                String content = msg.getContent();
+                String content = msg.content();
                 if (isFileMessage(content)) {
                     String visibleContent = extractVisibleMessage(content);
                     String fileName = extractFileName(visibleContent);
                     String storedPath = extractFilePath(content);
                     boolean isFolder = extractIsFolder(content);
                     if (fileName == null || fileName.isBlank()) {
-                        addMessageBubbleInternal(content, outgoing, time,
-                                selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
+                        addMessageBubbleInternal(msg.id(), content, outgoing, time,
+                                selectedPeer.startsWith("group-") ? msg.sender() : null, msg.timestamp());
                     } else {
                         java.io.File storedFile = storedPath != null ? new java.io.File(storedPath) : null;
-                        addFileMessageBubble(storedFile, fileName, outgoing, time,
-                                selectedPeer.startsWith("group-") ? msg.getSenderId() : null, isFolder);
+                        addFileMessageBubble(msg.id(), storedFile, fileName, outgoing, time,
+                                selectedPeer.startsWith("group-") ? msg.sender() : null, isFolder, msg.timestamp());
                     }
                 } else {
-                    addMessageBubbleInternal(content, outgoing, time,
-                            selectedPeer.startsWith("group-") ? msg.getSenderId() : null);
+                    addMessageBubbleInternal(msg.id(), content, outgoing, time,
+                            selectedPeer.startsWith("group-") ? msg.sender() : null, msg.timestamp());
                 }
                 this.messageCount++;
             }
@@ -1066,13 +1152,7 @@ public class ChatPanel extends JPanel {
         if (selectedPeer == null) {
             return;
         }
-        ConversationItem selectedItem = findConversation(selectedPeer);
-        if (selectedPeer.startsWith("group-") && !canSendToConversation(selectedItem)) {
-            flow("Group chat is unavailable", "At least 2 group members must be online.",
-                    ActivityFlowPanel.Tone.INFO);
-            updatePeerHeader(selectedItem);
-            return;
-        }
+        // Group chat is always allowed - no online-count restriction
 
         messageInput.setEnabled(false);
         if (attachBtn != null)
@@ -1108,8 +1188,9 @@ public class ChatPanel extends JPanel {
                 try {
                     sent = Boolean.TRUE.equals(get());
                     if (sent) {
-                        addMessageBubble(textToSend, true, time);
-                        localDb.saveMessage(username, peerToSend, username, textToSend, Instant.now().getEpochSecond());
+                        long ts = Instant.now().getEpochSecond();
+                        long msgId = localDb.saveMessage(username, peerToSend, username, textToSend, ts);
+                        addMessageBubble(msgId, textToSend, true, time, ts);
                     } else {
                         messageInput.setText(textToSend);
                     }
@@ -1186,14 +1267,19 @@ public class ChatPanel extends JPanel {
                 String time = Instant.ofEpochSecond(msg.getSentAt())
                         .atZone(ZoneId.systemDefault()).toLocalTime().format(TIME_FMT);
                 SwingUtilities.invokeLater(() -> {
+                    if ("RECALL".equals(msg.getControlType())) {
+                        handleIncomingRecall(sender, msg.getTargetTimestamp());
+                        return;
+                    }
                     ConversationItem item = ensureConversation(sender, true, true);
+                    long ts = msg.getSentAt();
+                    long msgId = localDb.saveMessage(username, sender, sender, text, ts);
                     if (sender.equals(selectedPeer)) {
-                        addMessageBubble(text, false, time);
+                        addMessageBubble(msgId, text, false, time, ts);
                         item.unreadCount = 0;
                     } else {
                         item.unreadCount++;
                     }
-                    localDb.saveMessage(username, sender, sender, text, msg.getSentAt());
                     userList.repaint();
                 });
             } else if (frame.getType() == PacketFrame.TYPE_PREKEY_RESPONSE) {
@@ -1240,13 +1326,14 @@ public class ChatPanel extends JPanel {
                                 syncGroupConversationItem(item, groupInfo);
                             }
 
+                            long ts = msg.getSentAt();
+                            long msgId = localDb.saveMessage(username, groupId, sender, text, ts);
                             if (groupId.equals(selectedPeer)) {
-                                addMessageBubble(text, false, time, sender);
+                                addMessageBubble(msgId, text, false, time, sender, ts);
                                 item.unreadCount = 0;
                             } else {
                                 item.unreadCount++;
                             }
-                            localDb.saveMessage(username, groupId, sender, text, msg.getSentAt());
                             if (groupId.equals(selectedPeer)) {
                                 updatePeerHeader(item);
                             }
@@ -1301,21 +1388,53 @@ public class ChatPanel extends JPanel {
         updatingUserList = true;
         try {
             userListModel.clear();
+            
+            // Get the current search query
+            String query = "";
+            if (contactField != null && contactField.getText() != null) {
+                query = contactField.getText().trim().toLowerCase();
+            }
+            
+            // Track every userId already added to prevent duplicates (groups AND users)
+            java.util.Set<String> seenIds = new java.util.HashSet<>();
+
+            // Step 1: Add groups from groupManager (authoritative source for groups)
             if (groupManager != null) {
                 for (GroupManager.GroupInfo g : groupManager.listGroups()) {
-                    ConversationItem item = groupConversationItem(g);
-                    userListModel.addElement(item);
+                    ConversationItem groupItem = groupConversationItem(g);
+                    boolean matches = query.isEmpty() || 
+                                      groupItem.userId.toLowerCase().contains(query) || 
+                                      (groupItem.displayName() != null && groupItem.displayName().toLowerCase().contains(query));
+                    if (matches && seenIds.add(g.groupId())) {
+                        userListModel.addElement(groupItem);
+                    }
                 }
             }
+
+            // Step 2: Add users/groups from list, skipping already-seen ids
             for (ConversationItem item : users) {
+                if (item.placeholder) continue;
+                
+                boolean matches = query.isEmpty() || 
+                                  item.userId.toLowerCase().contains(query) || 
+                                  (item.displayName() != null && item.displayName().toLowerCase().contains(query));
+                if (!matches) continue;
+                
+                if (!seenIds.add(item.userId)) continue; // duplicate — skip
                 userListModel.addElement(item);
             }
-            if (selectedPeer != null && findIn(users, selectedPeer) == null && !selectedPeer.startsWith("group-")) {
+
+            // Step 3: Ensure the currently selected peer is always visible if there's no search query
+            if (query.isEmpty() && selectedPeer != null && !seenIds.contains(selectedPeer)
+                    && !selectedPeer.startsWith("group-")) {
                 userListModel.addElement(ConversationItem.manual(selectedPeer));
             }
+
             if (userListModel.isEmpty()) {
-                userListModel.addElement(ConversationItem.placeholder("No conversations available"));
+                userListModel.addElement(ConversationItem.placeholder(query.isEmpty() ? "No conversations available" : "No matching results"));
             }
+            
+            // Re-select if it's still in the list
             selectListItem(selectedPeer);
         } finally {
             updatingUserList = false;
@@ -1326,6 +1445,8 @@ public class ChatPanel extends JPanel {
             refreshComposerState(selected);
         }
     }
+
+
 
     private ConversationItem ensureConversation(String peer, boolean online, boolean preKeyAvailable) {
         ConversationItem existing = findConversation(peer);
@@ -1417,7 +1538,7 @@ public class ChatPanel extends JPanel {
             isFolder = false;
         }
 
-        addFileMessageBubble(fileToSend, selectedFile.getName(), true, time, null, isFolder);
+        // We add bubble in done() after saving.
 
         new SwingWorker<Boolean, Void>() {
             @Override
@@ -1433,12 +1554,15 @@ public class ChatPanel extends JPanel {
                     flow("File sent",
                             "\"" + selectedFile.getName() + "\" -> " + peer,
                             ActivityFlowPanel.Tone.SUCCESS);
+                    long ts = Instant.now().getEpochSecond();
+                    long msgId = -1;
                     if (localDb != null) {
-                        localDb.saveMessage(username, peer, username,
+                        msgId = localDb.saveMessage(username, peer, username,
                                 buildFileMessageContent("File: " + selectedFile.getName() + " (sent)", fileToSend,
                                         isFolder),
-                                Instant.now().getEpochSecond());
+                                ts);
                     }
+                    addFileMessageBubble(msgId, fileToSend, selectedFile.getName(), true, time, null, isFolder, ts);
                 } catch (Exception ex) {
                     log.error("File send failed", ex);
                     flow("File send failed", ex.getMessage(), ActivityFlowPanel.Tone.ERROR);
@@ -1563,15 +1687,17 @@ public class ChatPanel extends JPanel {
         }
 
         // Save to SQLite DB for persistence
+        long ts = Instant.now().getEpochSecond();
+        long msgId = -1;
         if (localDb != null) {
-            localDb.saveMessage(username, peer, senderId,
+            msgId = localDb.saveMessage(username, peer, senderId,
                     buildFileMessageContent("File: " + displayName + " (received - SHA-256 OK)", file,
                             receivedIsFolder),
-                    Instant.now().getEpochSecond());
+                    ts);
         }
 
         if (peer.equals(selectedPeer)) {
-            addFileMessageBubble(file, displayName, false, time, senderId, receivedIsFolder);
+            addFileMessageBubble(msgId, file, displayName, false, time, senderId, receivedIsFolder, ts);
         } else {
             ConversationItem item = findConversation(peer);
             if (item == null) {
@@ -1585,7 +1711,6 @@ public class ChatPanel extends JPanel {
                     if (group != null) {
                         item.groupOnlineCount = onlineMemberCount(group);
                         item.groupMemberCount = group.memberIds() == null ? 0 : group.memberIds().size();
-                        item.leaderId = group.leaderId();
                     }
                     addConversation(item);
                 } else {
@@ -1811,7 +1936,7 @@ public class ChatPanel extends JPanel {
 
             if (localLeader && !memberId.equals(username) && !memberId.equals(group.leaderId())) {
                 JButton removeBtn = UiStyles.dangerButton("Remove");
-                removeBtn.setPreferredSize(new Dimension(76, 32));
+                // Let the button use its natural preferred size (don't force a too-small width)
                 removeBtn.setEnabled(group.memberIds().size() > GroupManager.MIN_GROUP_MEMBERS);
                 removeBtn.setToolTipText(removeBtn.isEnabled()
                         ? "Remove this member from the group"
@@ -1964,216 +2089,9 @@ public class ChatPanel extends JPanel {
         dialog.setVisible(true);
     }
 
-    private void showCreateGroupDialogLegacy() {
-        javax.swing.JFrame topFrame = (javax.swing.JFrame) javax.swing.SwingUtilities.getWindowAncestor(this);
-
-        javax.swing.JDialog dialog = new javax.swing.JDialog(topFrame, "Create new group chat", true);
-        dialog.setMinimumSize(new Dimension(460, 420));
-        dialog.setUndecorated(false);
-        dialog.getContentPane().setBackground(UIConstants.DEEP_CARBON);
-
-        JPanel content = new JPanel();
-        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setBackground(UIConstants.DEEP_CARBON);
-        content.setBorder(new EmptyBorder(24, 28, 24, 28));
-
-        JLabel title = UiStyles.headingLabel("Create group chat");
-        title.setForeground(UIConstants.TEXT_WHITE);
-        title.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        content.add(title);
-        content.add(Box.createVerticalStrut(20));
-
-        JLabel nameLabel = UiStyles.mutedLabel("Group name");
-        nameLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        content.add(nameLabel);
-        content.add(Box.createVerticalStrut(6));
-
-        JTextField groupNameField = UiStyles.styledTextField(20);
-        UiStyles.setPlaceholder(groupNameField, "Example: Study Group, Dev Team...");
-        groupNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
-        groupNameField.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        content.add(groupNameField);
-        content.add(Box.createVerticalStrut(18));
-
-        JLabel membersLabel = UiStyles.mutedLabel("Select group members");
-        membersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        content.add(membersLabel);
-        content.add(Box.createVerticalStrut(6));
-
-        JPanel membersPanel = new JPanel();
-        membersPanel.setLayout(new BoxLayout(membersPanel, BoxLayout.Y_AXIS));
-        membersPanel.setBackground(UIConstants.INPUT_BG);
-        membersPanel.setBorder(new EmptyBorder(8, 8, 8, 8));
-
-        List<javax.swing.JCheckBox> checkBoxes = new ArrayList<>();
-        if (lastUserList != null) {
-            for (ConversationItem user : lastUserList) {
-                if (user != null && !user.placeholder && !user.isGroup && !user.userId.equals(username)) {
-                    javax.swing.JCheckBox cb = new javax.swing.JCheckBox(user.displayName() + " (" + user.userId + ")");
-                    cb.setActionCommand(user.userId);
-                    cb.setFont(UIConstants.FONT_BODY);
-                    cb.setForeground(UIConstants.TEXT_SILVER);
-                    cb.setOpaque(false);
-                    cb.setFocusPainted(false);
-                    if (user.userId.equals(selectedPeer)) {
-                        cb.setSelected(true);
-                    }
-                    membersPanel.add(cb);
-                    membersPanel.add(Box.createVerticalStrut(6));
-                    checkBoxes.add(cb);
-                }
-            }
-        }
-
-        if (checkBoxes.isEmpty()) {
-            JLabel noUsersLabel = new JLabel("No other online members available");
-            noUsersLabel.setFont(UIConstants.FONT_BODY);
-            noUsersLabel.setForeground(UIConstants.TEXT_MUTED);
-            noUsersLabel.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-            membersPanel.add(noUsersLabel);
-        }
-
-        JScrollPane scrollPane = new JScrollPane(membersPanel);
-        scrollPane.setBorder(BorderFactory.createLineBorder(UIConstants.GLASS_BORDER, 1));
-        scrollPane.setBackground(UIConstants.INPUT_BG);
-        scrollPane.getViewport().setBackground(UIConstants.INPUT_BG);
-        scrollPane.setPreferredSize(new Dimension(380, 150));
-        scrollPane.setMinimumSize(new Dimension(380, 150));
-        scrollPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
-        scrollPane.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        content.add(scrollPane);
-        content.add(Box.createVerticalStrut(24));
-
-        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 8, 0));
-        btnRow.setOpaque(false);
-        btnRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-
-        JButton cancelBtn = UiStyles.ghostButton("Cancel");
-        cancelBtn.addActionListener(e -> dialog.dispose());
-        btnRow.add(cancelBtn);
-
-        JButton createBtn = UiStyles.primaryButton("Create Group");
-        createBtn.addActionListener(e -> {
-            String groupName = groupNameField.getText().trim();
-            if (groupName.isEmpty()) {
-                groupNameField.requestFocus();
-                return;
-            }
-            List<String> memberIds = new ArrayList<>();
-            for (javax.swing.JCheckBox cb : checkBoxes) {
-                if (cb.isSelected()) {
-                    memberIds.add(cb.getActionCommand());
-                }
-            }
-            if (memberIds.isEmpty()) {
-                javax.swing.JOptionPane.showMessageDialog(dialog,
-                        "Please select at least 1 member.", "Error",
-                        javax.swing.JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-            GroupManager.GroupInfo group = groupManager.createGroup(groupName, memberIds);
-            flow("Group created", "\"" + groupName + "\" with " + memberIds.size() + " members",
-                    ActivityFlowPanel.Tone.SUCCESS);
-            dialog.dispose();
-
-            // Open the newly created group conversation.
-            ConversationItem groupItem = ConversationItem.manual(group.groupId());
-            groupItem.displayName = group.groupName();
-            groupItem.online = true;
-            groupItem.isGroup = true;
-            SwingUtilities.invokeLater(() -> {
-                addConversation(groupItem);
-                selectPeer(groupItem);
-            });
-        });
-        btnRow.add(createBtn);
-        content.add(btnRow);
-
-        dialog.setContentPane(content);
-        dialog.pack();
-        dialog.setLocationRelativeTo(topFrame);
-        dialog.setVisible(true);
-    }
-
     // =========================================================================
     // === TÍNH NĂNG MỚI: Voice/Video Call =====================================
     // =========================================================================
-
-    private static class VideoMeshPanel extends JPanel {
-        private float waveOffset = 0f;
-        boolean micMuted = false;
-        boolean camOff = false;
-        private final String peerId;
-        private final String localId;
-        private final javax.swing.Timer timer;
-
-        VideoMeshPanel(String peerId, String localId) {
-            this.peerId = peerId;
-            this.localId = localId;
-            setLayout(null);
-
-            timer = new javax.swing.Timer(50, e -> {
-                waveOffset += 0.05f;
-                repaint();
-            });
-            timer.start();
-        }
-
-        void cleanup() {
-            timer.stop();
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            int w = getWidth();
-            int h = getHeight();
-
-            if (camOff) {
-                g2.setColor(new Color(15, 23, 42));
-                g2.fillRect(0, 0, w, h);
-                g2.setColor(UIConstants.TEXT_MUTED);
-                g2.setFont(UIConstants.FONT_BODY.deriveFont(16f));
-                String s = "Camera is off";
-                int sw = g2.getFontMetrics().stringWidth(s);
-                g2.drawString(s, (w - sw) / 2, h / 2 + 80);
-            } else {
-                float x1 = (float) (w * (0.5 + 0.3 * Math.sin(waveOffset)));
-                float y1 = (float) (h * (0.3 + 0.2 * Math.cos(waveOffset * 0.7)));
-                float x2 = (float) (w * (0.2 + 0.4 * Math.cos(waveOffset * 1.3)));
-                float y2 = (float) (h * (0.7 + 0.15 * Math.sin(waveOffset * 0.9)));
-
-                Point2D center = new Point2D.Float(x1, y1);
-                float radius = Math.max(w, h) * 0.8f;
-                float[] dist = { 0.0f, 0.5f, 1.0f };
-                Color[] colors = {
-                        new Color(13, 148, 136, 120),
-                        new Color(79, 70, 229, 90),
-                        new Color(15, 23, 42, 255)
-                };
-
-                java.awt.RadialGradientPaint radial = new java.awt.RadialGradientPaint(
-                        center, radius, dist, colors);
-                g2.setPaint(radial);
-                g2.fillRect(0, 0, w, h);
-
-                Point2D center2 = new Point2D.Float(x2, y2);
-                Color[] colors2 = {
-                        new Color(124, 58, 237, 70),
-                        new Color(13, 148, 136, 50),
-                        new Color(0, 0, 0, 0)
-                };
-                java.awt.RadialGradientPaint radial2 = new java.awt.RadialGradientPaint(
-                        center2, radius * 0.7f, dist, colors2);
-                g2.setPaint(radial2);
-                g2.fillRect(0, 0, w, h);
-            }
-            g2.dispose();
-        }
-    }
 
     /**
      * Bắt đầu cuộc gọi tới peer đang chọn.
@@ -2276,7 +2194,6 @@ public class ChatPanel extends JPanel {
         item.isGroup = true;
         item.groupOnlineCount = onlineCount;
         item.groupMemberCount = group.memberIds().size();
-        item.leaderId = group.leaderId();
     }
 
     private int onlineMemberCount(GroupManager.GroupInfo group) {
@@ -2304,10 +2221,8 @@ public class ChatPanel extends JPanel {
     }
 
     private boolean canSendToConversation(ConversationItem item) {
-        if (item == null) {
-            return selectedPeer != null;
-        }
-        return true;
+        // Always allow sending — no online-count restriction
+        return selectedPeer != null;
     }
 
     private void refreshComposerState(ConversationItem item) {
@@ -2342,6 +2257,21 @@ public class ChatPanel extends JPanel {
             }
             applyUserList(lastUserList);
             flow("You were removed from the group", groupMsg.getGroupName(), ActivityFlowPanel.Tone.INFO);
+            return;
+        }
+
+        if (GroupManager.CONTROL_GROUP_DELETED.equals(groupMsg.getControlType())) {
+            groupManager.removeGroup(groupId);
+            if (groupId.equals(selectedPeer)) {
+                clearActiveChat();
+            }
+            applyUserList(lastUserList);
+            flow("Group deleted by leader", groupMsg.getGroupName(), ActivityFlowPanel.Tone.INFO);
+            return;
+        }
+
+        if (GroupManager.CONTROL_MESSAGE_RECALLED.equals(groupMsg.getControlType())) {
+            handleIncomingRecall(groupId, groupMsg.getTargetMessageTimestamp());
             return;
         }
 
@@ -2405,28 +2335,28 @@ public class ChatPanel extends JPanel {
         activityPanel.addEvent(title, body, tone);
     }
 
-    private void addMessageBubble(String text, boolean outgoing, String time) {
-        addMessageBubble(text, outgoing, time, null);
+    private void addMessageBubble(long msgId, String text, boolean outgoing, String time, long timestamp) {
+        addMessageBubble(msgId, text, outgoing, time, null, timestamp);
     }
 
-    private void addMessageBubble(String text, boolean outgoing, String time, String senderId) {
+    private void addMessageBubble(long msgId, String text, boolean outgoing, String time, String senderId, long timestamp) {
         if (this.messageCount == 0) {
             messageContainer.removeAll();
         }
-        addMessageBubbleInternal(text, outgoing, time, senderId);
+        addMessageBubbleInternal(msgId, text, outgoing, time, senderId, timestamp);
         this.messageCount++;
         scrollMessagesToEnd();
     }
 
-    private void addMessageBubbleInternal(String text, boolean outgoing, String time) {
-        addMessageBubbleInternal(text, outgoing, time, null);
-    }
 
-    private void addMessageBubbleInternal(String text, boolean outgoing, String time, String senderId) {
+    private void addMessageBubbleInternal(long msgId, String text, boolean outgoing, String time, String senderId, long timestamp) {
         JPanel row = new JPanel(new FlowLayout(
                 outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.putClientProperty("msgId", msgId);
+        row.putClientProperty("timestamp", timestamp);
+        row.putClientProperty("senderId", senderId != null ? senderId : username);
 
         if (!outgoing) {
             AvatarBadge avatar = new AvatarBadge(senderId != null ? senderId : selectedPeer, Color.decode("#5B54F6"),
@@ -2450,6 +2380,25 @@ public class ChatPanel extends JPanel {
         }
 
         MessageBubble bubble = new MessageBubble(text, outgoing);
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem copyItem = new JMenuItem("Sao chép");
+        copyItem.addActionListener(e -> {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new java.awt.datatransfer.StringSelection(text), null);
+        });
+        menu.add(copyItem);
+
+        if (outgoing && msgId > 0) {
+            JMenuItem deleteItem = new JMenuItem("Xóa");
+            deleteItem.addActionListener(e -> deleteLocalMessage(msgId, row));
+            menu.add(deleteItem);
+
+            JMenuItem recallItem = new JMenuItem("Thu hồi");
+            recallItem.addActionListener(e -> recallMessage(msgId, selectedPeer, timestamp, row));
+            menu.add(recallItem);
+        }
+        bubble.setComponentPopupMenu(menu);
+
         bubble.setAlignmentX(Component.LEFT_ALIGNMENT);
         bubbleAndMeta.add(bubble);
 
@@ -2472,17 +2421,9 @@ public class ChatPanel extends JPanel {
     /**
      * Add a message bubble representing a received file with an Open button.
      */
-    private void addFileMessageBubble(String fileName, boolean outgoing, String time, String senderId) {
-        addFileMessageBubble(null, fileName, outgoing, time, senderId, false);
-    }
 
-    private void addFileMessageBubble(java.io.File file, String fileName, boolean outgoing, String time,
-            String senderId) {
-        addFileMessageBubble(file, fileName, outgoing, time, senderId, false);
-    }
-
-    private void addFileMessageBubble(java.io.File file, String fileName, boolean outgoing, String time,
-            String senderId, boolean isFolder) {
+    private void addFileMessageBubble(long msgId, java.io.File file, String fileName, boolean outgoing, String time,
+            String senderId, boolean isFolder, long timestamp) {
         if (this.messageCount == 0) {
             messageContainer.removeAll();
         }
@@ -2491,6 +2432,9 @@ public class ChatPanel extends JPanel {
                 outgoing ? FlowLayout.RIGHT : FlowLayout.LEFT, 0, 0));
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.putClientProperty("msgId", msgId);
+        row.putClientProperty("timestamp", timestamp);
+        row.putClientProperty("senderId", senderId != null ? senderId : username);
 
         if (!outgoing) {
             AvatarBadge avatar = new AvatarBadge(senderId != null ? senderId : selectedPeer, Color.decode("#5B54F6"),
@@ -2624,6 +2568,95 @@ public class ChatPanel extends JPanel {
         scrollMessagesToEnd();
     }
 
+    private void deleteLocalMessage(long msgId, JPanel row) {
+        if (localDb != null) {
+            localDb.deleteMessage(msgId);
+        }
+        removeRowFromUI(row);
+    }
+
+    private void removeRowFromUI(JPanel row) {
+        Component[] comps = messageContainer.getComponents();
+        for (int i = 0; i < comps.length; i++) {
+            if (comps[i] == row) {
+                messageContainer.remove(i);
+                if (i < messageContainer.getComponentCount() && comps[i + 1] instanceof Box.Filler) {
+                    messageContainer.remove(i); // Remove strut
+                }
+                break;
+            }
+        }
+        messageContainer.revalidate();
+        messageContainer.repaint();
+    }
+
+    private void recallMessage(long msgId, String peer, long timestamp, JPanel row) {
+        if (localDb != null) {
+            localDb.updateMessageText(peer, timestamp, "Tin nhắn đã bị thu hồi");
+        }
+        // Update local UI
+        updateBubbleTextInUI(row, "Tin nhắn đã bị thu hồi");
+
+        if (peer.startsWith("group-")) {
+            if (groupManager != null) {
+                try {
+                    groupManager.sendRecallMessage(peer, timestamp);
+                } catch (Exception ex) {
+                    log.error("Failed to send group recall", ex);
+                }
+            }
+        } else {
+            ChatMessage msg = new ChatMessage();
+            msg.setSenderId(username);
+            msg.setRecipientId(peer);
+            msg.setSentAt(Instant.now().getEpochSecond());
+            msg.setControlType("RECALL");
+            msg.setTargetTimestamp(timestamp);
+            try {
+                EncryptedChatEnvelope envelope = e2ee.encryptMessageForPeer(peer, msg);
+                byte[] payload = JsonSerializer.toBytes(envelope);
+                e2ee.sendFrame(PacketFrame.TYPE_CHAT_MESSAGE, payload);
+            } catch (Exception ex) {
+                log.error("Failed to send recall", ex);
+            }
+        }
+    }
+
+    private void updateBubbleTextInUI(JPanel row, String newText) {
+        // Find MessageBubble inside row and update it
+        for (Component c1 : row.getComponents()) {
+            if (c1 instanceof JPanel bubbleAndMeta) {
+                for (Component c2 : bubbleAndMeta.getComponents()) {
+                    if (c2 instanceof MessageBubble mb) {
+                        mb.setText(newText);
+                        // Also make it look muted
+                        mb.setTextColor(UIConstants.TEXT_MUTED);
+                        mb.setTextFont(UIConstants.FONT_BODY.deriveFont(Font.ITALIC));
+                        break;
+                    }
+                }
+            }
+        }
+        row.revalidate();
+        row.repaint();
+    }
+
+    private void handleIncomingRecall(String peer, long targetTimestamp) {
+        if (localDb != null) {
+            localDb.updateMessageText(peer, targetTimestamp, "Tin nhắn đã bị thu hồi");
+        }
+        if (peer.equals(selectedPeer)) {
+            for (Component c : messageContainer.getComponents()) {
+                if (c instanceof JPanel row) {
+                    Long rowTs = (Long) row.getClientProperty("timestamp");
+                    if (rowTs != null && rowTs == targetTimestamp) {
+                        updateBubbleTextInUI(row, "Tin nhắn đã bị thu hồi");
+                    }
+                }
+            }
+        }
+    }
+
     private static boolean isFileMessage(String content) {
         return content != null && content.startsWith("File: ");
     }
@@ -2670,7 +2703,6 @@ public class ChatPanel extends JPanel {
         private boolean isGroup;
         private int groupOnlineCount;
         private int groupMemberCount;
-        private String leaderId;
 
         private ConversationItem(String userId, boolean online, boolean preKeyAvailable,
                 long lastSeenAt, boolean placeholder, boolean isGroup) {
@@ -2733,9 +2765,7 @@ public class ChatPanel extends JPanel {
                 return "Waiting for server...";
             }
             if (isGroup && groupMemberCount > 0) {
-                return online
-                        ? groupOnlineCount + "/" + groupMemberCount + " members online"
-                        : "Need 2 members online";
+                return groupOnlineCount + "/" + groupMemberCount + " members online";
             }
             if (isGroup) {
                 return "Group chat";
@@ -2743,9 +2773,6 @@ public class ChatPanel extends JPanel {
             return online ? "Active now" : "Offline";
         }
 
-        String badgeText() {
-            return "";
-        }
 
         String timeText() {
             if (placeholder || lastSeenAt <= 0) {
@@ -2989,12 +3016,10 @@ public class ChatPanel extends JPanel {
     }
 
     private static final class MessageBubble extends JPanel {
-        private final boolean outgoing;
         private final Color bubbleColor;
         private final Color borderColor;
 
         MessageBubble(String text, boolean outgoing) {
-            this.outgoing = outgoing;
             this.bubbleColor = outgoing ? new Color(0, 161, 156, 38) : UIConstants.GLASS_CARD;
             this.borderColor = outgoing ? new Color(0, 161, 156, 102) : UIConstants.GLASS_BORDER;
             setLayout(new BorderLayout(0, 0));
@@ -3010,6 +3035,7 @@ public class ChatPanel extends JPanel {
             body.setBorder(new EmptyBorder(10, 14, 10, 14));
             body.setOpaque(false);
             body.setLineWrap(false);
+            body.setInheritsPopupMenu(true);
 
             Dimension pref = body.getPreferredSize();
             body.setLineWrap(true);
@@ -3032,6 +3058,57 @@ public class ChatPanel extends JPanel {
             setPreferredSize(size);
             setMinimumSize(size);
             setMaximumSize(size);
+        }
+
+        public void setText(String text) {
+            Component[] comps = getComponents();
+            if (comps.length > 0 && comps[0] instanceof JTextArea body) {
+                body.setText(text);
+
+                int maxW = 400;
+                // Step 1: measure natural (single-line) width with lineWrap OFF
+                body.setLineWrap(false);
+                body.setPreferredSize(null);
+                body.setSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+                Dimension pref = body.getPreferredSize();
+
+                int width;
+                if (pref.width + 16 <= maxW) {
+                    width = Math.max(70, pref.width + 16);
+                } else {
+                    width = maxW;
+                }
+
+                // Step 2: restore lineWrap and measure height at computed width
+                body.setLineWrap(true);
+                body.setSize(new Dimension(width, Integer.MAX_VALUE));
+                int height = body.getPreferredSize().height;
+
+                Dimension size = new Dimension(width, height);
+                body.setPreferredSize(size);
+                body.setMinimumSize(size);
+                body.setMaximumSize(size);
+
+                setPreferredSize(size);
+                setMinimumSize(size);
+                setMaximumSize(size);
+
+                revalidate();
+                repaint();
+            }
+        }
+
+        public void setTextColor(Color color) {
+            Component[] comps = getComponents();
+            if (comps.length > 0 && comps[0] instanceof JTextArea body) {
+                body.setForeground(color);
+            }
+        }
+        public void setTextFont(java.awt.Font font) {
+            Component[] comps = getComponents();
+            if (comps.length > 0 && comps[0] instanceof JTextArea body) {
+                body.setFont(font);
+            }
         }
 
         @Override
@@ -3104,7 +3181,7 @@ public class ChatPanel extends JPanel {
 
             JButton close = createHeaderButton("close");
             close.setToolTipText("Hide activity panel");
-            close.addActionListener(e -> connHeaderBtn.doClick());
+            close.addActionListener(e -> closeRightRail());
             header.add(close, BorderLayout.EAST);
             return header;
         }
@@ -3124,6 +3201,13 @@ public class ChatPanel extends JPanel {
                     int ix = (getWidth() - size) / 2;
                     int iy = (getHeight() - size) / 2;
                     switch (iconType) {
+                        case SHARE -> {
+                            g2.drawOval(ix + 2, iy + size / 2 - 2, 4, 4);
+                            g2.drawOval(ix + size - 6, iy + 2, 4, 4);
+                            g2.drawOval(ix + size - 6, iy + size - 6, 4, 4);
+                            g2.drawLine(ix + 6, iy + size / 2, ix + size - 6, iy + 4);
+                            g2.drawLine(ix + 6, iy + size / 2, ix + size - 6, iy + size - 4);
+                        }
                         case KEY -> {
                             int r = size / 2;
                             g2.drawOval(ix, iy + (size - r) / 2, r, r);

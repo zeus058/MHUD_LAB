@@ -1,13 +1,11 @@
 package vn.edu.hcmus.securechat.ca.service;
 
 import java.math.BigInteger;
-import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Date;
@@ -53,6 +51,7 @@ public class CertificateAuthority {
 
     private PrivateKey caPrivateKey;
     private X509Certificate caCertificate;
+    private X509Certificate[] caCertificateChain;
 
     static {
         if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
@@ -68,6 +67,7 @@ public class CertificateAuthority {
     CertificateAuthority(PrivateKey caPrivateKey, X509Certificate caCertificate) {
         this.caPrivateKey = caPrivateKey;
         this.caCertificate = caCertificate;
+        this.caCertificateChain = new X509Certificate[] { caCertificate };
     }
 
     /**
@@ -76,26 +76,12 @@ public class CertificateAuthority {
      * (Trong production, admin phải tạo sẵn cặp khóa CA qua certutil hoặc OpenSSL)
      */
     private void initializeCaKeys() throws KeyStoreException, NoSuchAlgorithmException {
-        KeyStore ks = KeyStoreManager.loadPersonalStore();
-
-        if (ks.containsAlias(CA_ALIAS)) {
-            try {
-                caPrivateKey = (PrivateKey) ks.getKey(CA_ALIAS, null);
-                caCertificate = (X509Certificate) ks.getCertificate(CA_ALIAS);
-                log.info("Loaded CA certificate from Windows-MY: CN={}", 
-                    caCertificate.getSubjectX500Principal().getName());
-            } catch (NoSuchAlgorithmException | UnrecoverableKeyException e) {
-                throw new KeyStoreException("Failed to load CA key/cert from Windows-MY", e);
-            }
-        } else {
-            // Fallback to PFX file in data/ca/
-            KeyStoreManager.loadFromPfxFallback(CA_ALIAS, (priv, cert) -> {
-                this.caPrivateKey = priv;
-                this.caCertificate = cert;
-            });
-            log.info("Loaded CA certificate from fallback file: CN={}", 
-                caCertificate.getSubjectX500Principal().getName());
-        }
+        KeyStoreManager.KeyPairEntry caKeys = KeyStoreManager.loadKeyPair(CA_ALIAS);
+        this.caPrivateKey = caKeys.privateKey();
+        this.caCertificate = caKeys.certificate();
+        this.caCertificateChain = caKeys.certificateChain();
+        log.info("Loaded CA certificate from PKCS12 file: CN={}", 
+            caCertificate.getSubjectX500Principal().getName());
     }
 
     /**
@@ -230,15 +216,6 @@ public class CertificateAuthority {
      * Lấy CA certificate chain (dùng cho certificate chain validation).
      */
     public X509Certificate[] getCertificateChain() throws KeyStoreException {
-        KeyStore ks = KeyStoreManager.loadPersonalStore();
-        java.security.cert.Certificate[] certChain = ks.getCertificateChain(CA_ALIAS);
-        if (certChain == null) {
-            return new X509Certificate[] { caCertificate };
-        }
-        X509Certificate[] x509Chain = new X509Certificate[certChain.length];
-        for (int i = 0; i < certChain.length; i++) {
-            x509Chain[i] = (X509Certificate) certChain[i];
-        }
-        return x509Chain;
+        return caCertificateChain != null ? caCertificateChain : new X509Certificate[] { caCertificate };
     }
 }

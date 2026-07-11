@@ -3,9 +3,7 @@ package vn.edu.hcmus.securechat.client.network;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -62,7 +60,6 @@ public class FileTransferManager {
         final byte[][] chunks;
         int receivedCount = 0;
         String groupId;
-        String groupName;
 
         InboundTransfer(FileMetadataDto meta, byte[] fileKey) {
             this.meta = meta;
@@ -255,9 +252,8 @@ public class FileTransferManager {
             byte[] fileKey = Base64.getDecoder().decode(parts[2]);
 
             InboundTransfer transfer = new InboundTransfer(meta, fileKey);
-            if (parts.length >= 5) {
+            if (parts.length >= 4) {
                 transfer.groupId = parts[3];
-                transfer.groupName = parts[4];
             }
             inboundTransfers.put(meta.getTransferId(), transfer);
             log.info("FILE_INIT accepted transferId={} from={} file={} chunks={} group={}",

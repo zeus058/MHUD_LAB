@@ -1,6 +1,5 @@
 package vn.edu.hcmus.securechat.client;
 
-import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Dimension;
 import java.util.Arrays;
@@ -312,29 +311,30 @@ public class ClientApp extends JFrame {
                 vn.edu.hcmus.securechat.common.protocol.PacketFrame frame = 
                         new vn.edu.hcmus.securechat.common.protocol.PacketFrame(vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_HANDSHAKE, (byte) 1, (short) 0, reqBytes);
 
-                java.net.Socket socket = new java.net.Socket(ServerConfig.NOTIFICATION_HOST, ServerConfig.NOTIFICATION_PORT);
-                socket.setSoTimeout(0); // keep alive
-                
-                vn.edu.hcmus.securechat.common.protocol.PacketFrame.write(socket.getOutputStream(), frame.getType(), frame.getPayload());
-                vn.edu.hcmus.securechat.common.protocol.PacketFrame response = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
-                
-                if (response.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
-                    log.info("Notification client successfully connected");
+                try (java.net.Socket socket = new java.net.Socket(ServerConfig.NOTIFICATION_HOST, ServerConfig.NOTIFICATION_PORT)) {
+                    socket.setSoTimeout(0); // keep alive
                     
-                    while (true) {
-                        vn.edu.hcmus.securechat.common.protocol.PacketFrame msgFrame = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
-                        if (msgFrame.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
-                            vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope env = 
-                                    vn.edu.hcmus.securechat.common.protocol.JsonSerializer.fromBytes(msgFrame.getPayload(), vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope.class);
-                            
-                            if ("SYSTEM".equals(env.getSenderId())) {
-                                byte[] encData = java.util.Base64.getDecoder().decode(env.getPayload());
-                                byte[] plainBytes = vn.edu.hcmus.securechat.common.crypto.AesGcmCipher.decrypt(sessionKey, encData);
-                                String message = new String(plainBytes, java.nio.charset.StandardCharsets.UTF_8);
+                    vn.edu.hcmus.securechat.common.protocol.PacketFrame.write(socket.getOutputStream(), frame.getType(), frame.getPayload());
+                    vn.edu.hcmus.securechat.common.protocol.PacketFrame response = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
+                    
+                    if (response.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
+                        log.info("Notification client successfully connected");
+                        
+                        while (true) {
+                            vn.edu.hcmus.securechat.common.protocol.PacketFrame msgFrame = vn.edu.hcmus.securechat.common.protocol.PacketFrame.read(socket.getInputStream());
+                            if (msgFrame.getType() == vn.edu.hcmus.securechat.common.protocol.PacketFrame.TYPE_CHAT_MESSAGE) {
+                                vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope env = 
+                                        vn.edu.hcmus.securechat.common.protocol.JsonSerializer.fromBytes(msgFrame.getPayload(), vn.edu.hcmus.securechat.common.protocol.dto.EncryptedChatEnvelope.class);
                                 
-                                javax.swing.SwingUtilities.invokeLater(() -> {
-                                    javax.swing.JOptionPane.showMessageDialog(null, "System Notification: " + message, "Notification", javax.swing.JOptionPane.INFORMATION_MESSAGE);
-                                });
+                                if ("SYSTEM".equals(env.getSenderId())) {
+                                    byte[] encData = java.util.Base64.getDecoder().decode(env.getPayload());
+                                    byte[] plainBytes = vn.edu.hcmus.securechat.common.crypto.AesGcmCipher.decrypt(sessionKey, encData);
+                                    String message = new String(plainBytes, java.nio.charset.StandardCharsets.UTF_8);
+                                    
+                                    javax.swing.SwingUtilities.invokeLater(() -> {
+                                        javax.swing.JOptionPane.showMessageDialog(null, "System Notification: " + message, "Notification", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                                    });
+                                }
                             }
                         }
                     }

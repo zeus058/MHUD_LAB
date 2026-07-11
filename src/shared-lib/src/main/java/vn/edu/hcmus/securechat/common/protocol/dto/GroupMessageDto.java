@@ -62,6 +62,9 @@ public class GroupMessageDto {
     @JsonProperty("removedMemberId")
     private String removedMemberId;
 
+    @JsonProperty("targetMessageTimestamp")
+    private long targetMessageTimestamp;
+
     public GroupMessageDto() {}
 
     public GroupMessageDto(String groupId, String groupName, String senderId,
@@ -108,4 +111,7 @@ public class GroupMessageDto {
 
     public String getRemovedMemberId() { return removedMemberId; }
     public void setRemovedMemberId(String removedMemberId) { this.removedMemberId = removedMemberId; }
+
+    public long getTargetMessageTimestamp() { return targetMessageTimestamp; }
+    public void setTargetMessageTimestamp(long targetMessageTimestamp) { this.targetMessageTimestamp = targetMessageTimestamp; }
 }

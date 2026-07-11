@@ -1,7 +1,6 @@
 package vn.edu.hcmus.securechat.client.ui;
 
 import java.awt.BasicStroke;
-import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -21,16 +20,12 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
-import javax.swing.border.EmptyBorder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Redesigned LoginPanel with 64/36 Split Layout matching Figma templates.
  */
 public class LoginPanel extends JPanel {
 
-    private static final Logger log = LoggerFactory.getLogger(LoginPanel.class);
     private static final int AUTH_FORM_WIDTH = 352;
 
     public interface AuthListener {

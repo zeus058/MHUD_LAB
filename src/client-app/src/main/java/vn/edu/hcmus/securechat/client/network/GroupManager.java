@@ -36,6 +36,7 @@ public class GroupManager {
     public static final String CONTROL_MEMBERS_UPDATED = "MEMBERS_UPDATED";
     public static final String CONTROL_MEMBER_REMOVED = "MEMBER_REMOVED";
     public static final String CONTROL_GROUP_DELETED = "GROUP_DELETED";
+    public static final String CONTROL_MESSAGE_RECALLED = "MESSAGE_RECALLED";
 
     private static final Logger log = LoggerFactory.getLogger(GroupManager.class);
 
@@ -188,14 +189,14 @@ public class GroupManager {
 
     public GroupInfo removeMember(String groupId, String memberId, String actorId) {
         GroupInfo old = requireGroup(groupId);
-        if (!old.isLeader(actorId)) {
-            throw new SecurityException("Only the group leader can remove members");
+        if (!old.isLeader(actorId) && !memberId.equals(actorId)) {
+            throw new SecurityException("Only the group leader can remove other members");
         }
         if (memberId == null || memberId.isBlank() || !old.memberIds().contains(memberId)) {
             return old;
         }
         if (memberId.equals(old.leaderId())) {
-            throw new IllegalArgumentException("The group leader cannot remove themself");
+            throw new IllegalArgumentException("The group leader cannot leave the group. Delete the group instead.");
         }
         if (old.memberIds().size() - 1 < MIN_GROUP_MEMBERS) {
             throw new IllegalStateException("A group must keep at least " + MIN_GROUP_MEMBERS + " members");
@@ -240,6 +241,23 @@ public class GroupManager {
         if (localDb != null) {
             localDb.deleteGroup(groupId);
         }
+    }
+
+    public void sendRecallMessage(String groupId, long targetTimestamp) throws IOException {
+        GroupInfo info = requireGroup(groupId);
+        ensureSocketConnected();
+        List<String> recipientIds = normalizeMembers(new ArrayList<>(recipientsExceptLocal(info.memberIds())), false);
+        if (recipientIds.isEmpty()) return;
+        GroupMessageDto dto = new GroupMessageDto(
+                info.groupId(), info.groupName(), localUserId,
+                recipientIds, Collections.nCopies(recipientIds.size(), ""),
+                Instant.now().getEpochSecond(), newNonce());
+        dto.setControlType(CONTROL_MESSAGE_RECALLED);
+        dto.setTargetMessageTimestamp(targetTimestamp);
+        dto.setMemberIds(new ArrayList<>(info.memberIds()));
+        dto.setLeaderId(info.leaderId());
+        sendGroupDto(dto);
+        log.info("GROUP_CONTROL sent groupId={} type={} targetTimestamp={}", groupId, CONTROL_MESSAGE_RECALLED, targetTimestamp);
     }
 
     private void sendGroupControl(GroupInfo info, String controlType,

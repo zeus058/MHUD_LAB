@@ -5,7 +5,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
-import java.security.NoSuchProviderException;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 
@@ -15,102 +14,34 @@ import org.slf4j.LoggerFactory;
 import vn.edu.hcmus.securechat.common.util.PathUtil;
 
 /**
- * Quản lý KeyStore — Phương án A: Bắt buộc Windows SunMSCAPI.
- *
- * Theo Contrains.md mục 1.2 — Phương án A:
- * Toàn bộ develop và demo trên Windows 10/11.
- * SunMSCAPI là bắt buộc, không có fallback.
- *
- * Private Key KHÔNG BAO GIỜ được lưu dưới dạng plaintext trên disk
- * hoặc xuất hiện dưới dạng plaintext trên RAM của application layer.
- *
- * Sử dụng:
- *   KeyStore ks = KeyStoreManager.loadPersonalStore();
- *   PrivateKey pk = (PrivateKey) ks.getKey(alias, null); // DPAPI tự giải mã
+ * Quản lý KeyStore — Sử dụng PKCS12 (.pfx/.p12) thuần túy làm định dạng lưu trữ khóa,
+ * hoàn toàn độc lập với nền tảng hệ điều hành (không phụ thuộc Windows SunMSCAPI).
  */
 public final class KeyStoreManager {
 
     private static final Logger log = LoggerFactory.getLogger(KeyStoreManager.class);
 
-    // Phương án A: Windows-only
-    private static final String KEYSTORE_TYPE_PERSONAL = "Windows-MY";
-    private static final String KEYSTORE_TYPE_ROOT     = "Windows-ROOT";
-    private static final String PROVIDER               = "SunMSCAPI";
-
     private KeyStoreManager() {}
 
     /**
-     * Load Windows Personal Certificate Store (chứa cert + private key của user).
-     * Private key được bảo vệ bởi Windows DPAPI — không cần password.
+     * DTO đại diện cho cặp khóa và chuỗi chứng chỉ được tải từ KeyStore.
      */
-    public static KeyStore loadPersonalStore() throws KeyStoreException {
-        try {
-            KeyStore ks = KeyStore.getInstance(KEYSTORE_TYPE_PERSONAL, PROVIDER);
-            ks.load(null, null); // SunMSCAPI không cần password
-            log.info("Loaded Windows Personal KeyStore (Windows-MY), entries={}",
-                    ks.size());
-            return ks;
-        } catch (NoSuchProviderException e) {
-            log.warn("SunMSCAPI provider not available (non-Windows OS). Using empty KeyStore to trigger fallback.");
-            try {
-                KeyStore emptyKs = KeyStore.getInstance("PKCS12");
-                emptyKs.load(null, null);
-                return emptyKs;
-            } catch (Exception ex) {
-                throw new KeyStoreException("Failed to create empty fallback KeyStore", ex);
-            }
-        } catch (Exception e) {
-            throw new KeyStoreException("Failed to load Windows-MY KeyStore", e);
-        }
-    }
+    public record KeyPairEntry(PrivateKey privateKey, X509Certificate certificate, X509Certificate[] certificateChain) {}
 
     /**
-     * Load Windows Root Certificate Store (chứa trusted CA certificates).
+     * Tải cặp khóa và chuỗi chứng chỉ từ file PKCS12 của một định danh (alias) tương ứng.
      */
-    public static KeyStore loadRootStore() throws KeyStoreException {
-        try {
-            KeyStore ks = KeyStore.getInstance(KEYSTORE_TYPE_ROOT, PROVIDER);
-            ks.load(null, null);
-            log.info("Loaded Windows Root KeyStore (Windows-ROOT), entries={}",
-                    ks.size());
-            return ks;
-        } catch (NoSuchProviderException e) {
-            log.warn("SunMSCAPI provider not available (non-Windows OS). Using empty KeyStore to trigger fallback.");
-            try {
-                KeyStore emptyKs = KeyStore.getInstance("PKCS12");
-                emptyKs.load(null, null);
-                return emptyKs;
-            } catch (Exception ex) {
-                throw new KeyStoreException("Failed to create empty fallback KeyStore", ex);
-            }
-        } catch (Exception e) {
-            throw new KeyStoreException("Failed to load Windows-ROOT KeyStore", e);
-        }
-    }
-
-    /**
-     * Kiểm tra xem alias có tồn tại trong Personal Store hay không.
-     */
-    public static boolean hasAlias(String alias) throws KeyStoreException {
-        KeyStore ks = loadPersonalStore();
-        return ks.containsAlias(alias);
-    }
-
-    /**
-     * Thử nạp cặp khóa/chứng chỉ từ file PFX/P12 trong thư mục data/keys/
-     * làm phương án dự phòng khi Windows KeyStore không có.
-     */
-    public static void loadFromPfxFallback(String alias, PfxResultHandler handler) throws KeyStoreException {
+    public static KeyPairEntry loadKeyPair(String alias) throws KeyStoreException {
         Path pfxPath = findPfxFile(alias);
         if (pfxPath == null) {
-            throw new KeyStoreException("Key alias '" + alias + "' not found in Windows-MY " +
-                    "and no fallback PFX file found in data/keys/");
+            throw new KeyStoreException("No PKCS12 (.pfx/.p12) keystore file found for alias '" + alias +
+                    "' under data/keys/ or data/ca/");
         }
 
-        log.info("Loading fallback key/cert from: {}", pfxPath.toAbsolutePath());
+        log.info("Loading key pair and certificate from PKCS12 file: {}", pfxPath.toAbsolutePath());
         try {
             KeyStore p12 = KeyStore.getInstance("PKCS12");
-            char[] pwd = "changeit".toCharArray(); // Password mặc định cho lab/demo
+            char[] pwd = "changeit".toCharArray(); // Mật khẩu mặc định
             try (FileInputStream fis = new FileInputStream(pfxPath.toFile())) {
                 p12.load(fis, pwd);
             }
@@ -122,22 +53,33 @@ public final class KeyStoreManager {
 
             PrivateKey key = (PrivateKey) p12.getKey(foundAlias, pwd);
             java.security.cert.Certificate cert = p12.getCertificate(foundAlias);
+            java.security.cert.Certificate[] chain = p12.getCertificateChain(foundAlias);
+
             if (key == null || cert == null) {
                 throw new KeyStoreException("Failed to extract key/cert from PFX: " + pfxPath);
             }
 
-            handler.handle(key, (X509Certificate) cert);
+            X509Certificate[] x509Chain;
+            if (chain != null) {
+                x509Chain = new X509Certificate[chain.length];
+                for (int i = 0; i < chain.length; i++) {
+                    x509Chain[i] = (X509Certificate) chain[i];
+                }
+            } else {
+                x509Chain = new X509Certificate[]{(X509Certificate) cert};
+            }
+
+            return new KeyPairEntry(key, (X509Certificate) cert, x509Chain);
         } catch (Exception e) {
-            throw new KeyStoreException("Failed to load PFX fallback for alias '" + alias + "': " + e.getMessage(), e);
+            throw new KeyStoreException("Failed to load PKCS12 keystore for alias '" + alias + "': " + e.getMessage(), e);
         }
     }
 
     private static Path findPfxFile(String alias) {
-        // Ưu tiên tìm trong data/keys/ của dự án
         Path[] candidates = {
                 PathUtil.resolve("data/keys/" + alias + ".pfx"),
                 PathUtil.resolve("data/keys/" + alias + ".p12"),
-                PathUtil.resolve("data/ca/" + alias + ".pfx"), // Trường hợp CA key
+                PathUtil.resolve("data/ca/" + alias + ".pfx"),
                 PathUtil.resolve("data/ca/" + alias + ".p12")
         };
 
@@ -147,9 +89,5 @@ public final class KeyStoreManager {
             }
         }
         return null;
-    }
-
-    public interface PfxResultHandler {
-        void handle(PrivateKey priv, X509Certificate cert) throws Exception;
     }
 }

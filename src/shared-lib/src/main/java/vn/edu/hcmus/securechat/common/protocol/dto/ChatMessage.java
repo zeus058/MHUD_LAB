@@ -31,6 +31,12 @@ public class ChatMessage {
     @JsonProperty("sentAt")
     private long sentAt;
 
+    @JsonProperty("controlType")
+    private String controlType;
+
+    @JsonProperty("targetTimestamp")
+    private long targetTimestamp;
+
     public ChatMessage() {}
 
     public ChatMessage(String senderId, String content, long sentAt) {
@@ -66,4 +72,10 @@ public class ChatMessage {
 
     public long getSentAt() { return sentAt; }
     public void setSentAt(long sentAt) { this.sentAt = sentAt; }
+
+    public String getControlType() { return controlType; }
+    public void setControlType(String controlType) { this.controlType = controlType; }
+
+    public long getTargetTimestamp() { return targetTimestamp; }
+    public void setTargetTimestamp(long targetTimestamp) { this.targetTimestamp = targetTimestamp; }
 }

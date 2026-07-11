@@ -131,11 +131,6 @@ class TicketGrantingServiceTest {
         byte[] tgtBytes = JsonSerializer.toBytes(expiredTgt);
         byte[] encTgt = HybridEncryption.encrypt(tgsKeyPair.getPublic(), tgtBytes);
 
-        // Tạo authenticator
-        AuthenticatorJson auth = new AuthenticatorJson(
-                "testUser", Instant.now().getEpochSecond(), "nonce-expired-test");
-        byte[] authBytes = JsonSerializer.toBytes(auth);
-        byte[] encAuth = AesGcmCipher.encrypt(sessionKeyTgs, authBytes);
 
         // Xác minh TGT đã hết hạn
         TgtInner decrypted = JsonSerializer.fromBytes(

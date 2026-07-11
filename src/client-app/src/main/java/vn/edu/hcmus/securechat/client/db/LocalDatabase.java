@@ -110,6 +110,8 @@ public class LocalDatabase {
 
     public record GroupInfoRecord(String groupId, String groupName, String members, String leaderId) {}
 
+    public record MessageRecord(long id, String sender, String content, long timestamp) {}
+
     public void saveGroup(String groupId, String groupName, String members, String leaderId) {
         try (Connection conn = DriverManager.getConnection(jdbcUrl);
              PreparedStatement pstmt = conn.prepareStatement(
@@ -163,17 +165,17 @@ public class LocalDatabase {
         return list;
     }
 
-    public void saveMessage(String owner, String peer, String sender, String content, long timestamp) {
+    public long saveMessage(String owner, String peer, String sender, String content, long timestamp) {
         if (dbKey == null) {
             log.warn("Skipping message save because the local database is locked");
-            return;
+            return -1;
         }
 
         byte[] plainText = content.getBytes(StandardCharsets.UTF_8);
         try (Connection conn = DriverManager.getConnection(jdbcUrl);
              PreparedStatement pstmt = conn.prepareStatement(
                      "INSERT INTO messages(owner, peer, sender, encrypted_content, timestamp) "
-                             + "VALUES(?, ?, ?, ?, ?)")) {
+                             + "VALUES(?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
             byte[] cipherText = AesGcmCipher.encrypt(dbKey, plainText);
             String encryptedBase64 = Base64.getEncoder().encodeToString(cipherText);
             pstmt.setString(1, owner);
@@ -182,27 +184,34 @@ public class LocalDatabase {
             pstmt.setString(4, encryptedBase64);
             pstmt.setLong(5, timestamp);
             pstmt.executeUpdate();
+            
+            try (ResultSet rs = pstmt.getGeneratedKeys()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
         } catch (Exception e) {
             log.error("Failed to save message", e);
         } finally {
             Arrays.fill(plainText, (byte) 0);
         }
+        return -1;
     }
 
-    public java.util.List<vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage> loadMessages(
-            String owner, String peer) {
-        java.util.List<vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage> list = new java.util.ArrayList<>();
+    public java.util.List<MessageRecord> loadMessages(String owner, String peer) {
+        java.util.List<MessageRecord> list = new java.util.ArrayList<>();
         if (dbKey == null) {
             return list;
         }
         try (Connection conn = DriverManager.getConnection(jdbcUrl);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "SELECT sender, encrypted_content, timestamp FROM messages "
+                     "SELECT id, sender, encrypted_content, timestamp FROM messages "
                              + "WHERE owner = ? AND peer = ? ORDER BY timestamp ASC")) {
             pstmt.setString(1, owner);
             pstmt.setString(2, peer);
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
+                    long id = rs.getLong("id");
                     String sender = rs.getString("sender");
                     String encryptedBase64 = rs.getString("encrypted_content");
                     long timestamp = rs.getLong("timestamp");
@@ -210,8 +219,7 @@ public class LocalDatabase {
                     byte[] plainText = AesGcmCipher.decrypt(dbKey, cipherText);
                     try {
                         String content = new String(plainText, StandardCharsets.UTF_8);
-                        list.add(new vn.edu.hcmus.securechat.common.protocol.dto.ChatMessage(
-                                sender, content, timestamp));
+                        list.add(new MessageRecord(id, sender, content, timestamp));
                     } finally {
                         Arrays.fill(plainText, (byte) 0);
                     }
@@ -221,6 +229,39 @@ public class LocalDatabase {
             log.error("Failed to read messages", e);
         }
         return list;
+    }
+
+    public void deleteMessage(long id) {
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             PreparedStatement pstmt = conn.prepareStatement("DELETE FROM messages WHERE id = ? AND owner = ?")) {
+            pstmt.setLong(1, id);
+            pstmt.setString(2, username);
+            pstmt.executeUpdate();
+            log.info("Deleted local message id={}", id);
+        } catch (Exception e) {
+            log.error("Failed to delete local message", e);
+        }
+    }
+
+    public void updateMessageText(String peer, long timestamp, String newText) {
+        if (dbKey == null) return;
+        byte[] plainText = newText.getBytes(StandardCharsets.UTF_8);
+        try (Connection conn = DriverManager.getConnection(jdbcUrl);
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "UPDATE messages SET encrypted_content = ? WHERE owner = ? AND peer = ? AND timestamp = ?")) {
+            byte[] cipherText = AesGcmCipher.encrypt(dbKey, plainText);
+            String encryptedBase64 = Base64.getEncoder().encodeToString(cipherText);
+            pstmt.setString(1, encryptedBase64);
+            pstmt.setString(2, username);
+            pstmt.setString(3, peer);
+            pstmt.setLong(4, timestamp);
+            pstmt.executeUpdate();
+            log.info("Updated message text for recall: peer={}, timestamp={}", peer, timestamp);
+        } catch (Exception e) {
+            log.error("Failed to update message text", e);
+        } finally {
+            Arrays.fill(plainText, (byte) 0);
+        }
     }
 
     /**

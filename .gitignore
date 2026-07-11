@@ -24,3 +24,5 @@ src/hs_err_pid*.log
 **/logs/
 src/kdc-server/data/
 
+# Standalone packaged ZIPs
+*.zip

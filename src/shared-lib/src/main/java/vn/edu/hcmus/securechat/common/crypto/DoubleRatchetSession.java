@@ -53,6 +53,13 @@ public class DoubleRatchetSession {
 
     public synchronized EncryptedChatEnvelope encrypt(String content)
             throws CryptoException, ProtocolException {
+        ChatMessage message = new ChatMessage();
+        message.setContent(content);
+        return encrypt(message);
+    }
+
+    public synchronized EncryptedChatEnvelope encrypt(ChatMessage message)
+            throws CryptoException, ProtocolException {
         long msgId = nextSendMsgId++;
         long timestamp = Instant.now().getEpochSecond();
         HkdfKeyDerivation.RatchetStep step = HkdfKeyDerivation.deriveRatchetStep(sendChainKey, msgId);
@@ -62,7 +69,13 @@ public class DoubleRatchetSession {
 
         byte[] plaintext = null;
         try {
-            ChatMessage message = new ChatMessage(conversationId, msgId, localId, remoteId, content, timestamp);
+            message.setConversationId(conversationId);
+            message.setMsgId(msgId);
+            message.setSenderId(localId);
+            message.setRecipientId(remoteId);
+            if (message.getSentAt() <= 0) {
+                message.setSentAt(timestamp);
+            }
             plaintext = JsonSerializer.toBytes(message);
             byte[] aad = aad(conversationId, msgId, localId, remoteId, timestamp);
             byte[] encrypted = AesGcmCipher.encryptWithNonce(step.messageKey(), plaintext, aad, step.nonce());

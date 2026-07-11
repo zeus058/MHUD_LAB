@@ -5,18 +5,14 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
-import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import vn.edu.hcmus.securechat.common.exception.CertificateRevokedException;
 import vn.edu.hcmus.securechat.common.protocol.dto.TgtRequest;
-import vn.edu.hcmus.securechat.common.protocol.dto.TgtResponse;
 import vn.edu.hcmus.securechat.kdc.crypto.KdcKeyManager;
 import vn.edu.hcmus.securechat.kdc.storage.KdcStorage;
 

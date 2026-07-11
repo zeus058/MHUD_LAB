@@ -6,13 +6,11 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.awt.LinearGradientPaint;
 import java.awt.RadialGradientPaint;
 import java.awt.RenderingHints;
 import java.awt.geom.Path2D;
@@ -361,29 +359,8 @@ public class ActivityFlowPanel extends JPanel {
         return value == null ? "" : value;
     }
 
-    private static class ConnectorLine extends JPanel {
-        ConnectorLine() {
-            setOpaque(false);
-            setPreferredSize(new Dimension(46, 20));
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(UIConstants.GLASS_BORDER);
-            g2.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1.0f, new float[]{3f, 3f}, 0.0f));
-            g2.drawLine(23, 0, 23, getHeight());
-            g2.dispose();
-        }
-    }
 
     private class StepRow extends JPanel {
-        private final IconType iconType;
-        private final String title;
-        private final String detail;
-        private final int idx;
         private StepState state = StepState.PENDING;
 
         private final JLabel titleLabel;
@@ -391,10 +368,6 @@ public class ActivityFlowPanel extends JPanel {
         private final JLabel checkmarkLabel;
 
         StepRow(IconType iconType, String title, String detail, int idx) {
-            this.iconType = iconType;
-            this.title = title;
-            this.detail = detail;
-            this.idx = idx;
 
             setOpaque(false);
             setLayout(new BorderLayout(16, 0));
@@ -600,10 +573,8 @@ public class ActivityFlowPanel extends JPanel {
     }
 
     private static final class TimelineRow extends JPanel {
-        private final Tone tone;
 
         TimelineRow(String title, String body, Tone tone) {
-            this.tone = tone;
             setOpaque(false);
             setLayout(new BorderLayout(10, 0));
             setBorder(new EmptyBorder(0, 0, 0, 2));

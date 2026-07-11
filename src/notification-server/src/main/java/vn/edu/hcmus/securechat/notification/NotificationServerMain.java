@@ -17,7 +17,6 @@ import vn.edu.hcmus.securechat.common.config.ServerConfig;
 import vn.edu.hcmus.securechat.common.crypto.AesGcmCipher;
 import vn.edu.hcmus.securechat.common.crypto.HybridEncryption;
 import vn.edu.hcmus.securechat.common.crypto.KeyStoreManager;
-import vn.edu.hcmus.securechat.common.exception.FramingException;
 import vn.edu.hcmus.securechat.common.protocol.JsonSerializer;
 import vn.edu.hcmus.securechat.common.protocol.MessageType;
 import vn.edu.hcmus.securechat.common.protocol.PacketFrame;
@@ -57,13 +56,13 @@ public class NotificationServerMain {
     
     private void loadKey() throws Exception {
         String alias = "securechat-notification";
-        java.security.KeyStore personalStore = KeyStoreManager.loadPersonalStore();
-        if (personalStore.containsAlias(alias)) {
-            privateKey = (java.security.PrivateKey) personalStore.getKey(alias, null);
-        } else {
-            final java.security.PrivateKey[] tmp = new java.security.PrivateKey[1];
-            KeyStoreManager.loadFromPfxFallback(alias, (priv, cert) -> tmp[0] = priv);
-            privateKey = tmp[0];
+        try {
+            KeyStoreManager.KeyPairEntry keys = KeyStoreManager.loadKeyPair(alias);
+            privateKey = keys.privateKey();
+        } catch (Exception e) {
+            log.warn("Could not load Notification Server private key from: {}. Trying fallback chat key...", alias);
+            KeyStoreManager.KeyPairEntry chatKeys = KeyStoreManager.loadKeyPair("securechat-chat");
+            privateKey = chatKeys.privateKey();
         }
         if (privateKey == null) {
             throw new Exception("Could not load Notification Server private key");

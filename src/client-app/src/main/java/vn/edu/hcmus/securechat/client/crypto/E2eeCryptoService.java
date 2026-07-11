@@ -208,6 +208,12 @@ public class E2eeCryptoService {
     }
 
     public EncryptedChatEnvelope encryptForPeer(String peerId, String content) throws Exception {
+        ChatMessage message = new ChatMessage();
+        message.setContent(content);
+        return encryptMessageForPeer(peerId, message);
+    }
+
+    public EncryptedChatEnvelope encryptMessageForPeer(String peerId, ChatMessage message) throws Exception {
         DoubleRatchetSession session = ratchetSessions.get(peerId);
         if (session == null) {
             synchronized (ratchetSessions) {
@@ -218,7 +224,7 @@ public class E2eeCryptoService {
             }
         }
 
-        EncryptedChatEnvelope env = session.encrypt(content);
+        EncryptedChatEnvelope env = session.encrypt(message);
         saveSessions();
         return env;
     }
