@@ -67,38 +67,32 @@ public class OcspResponder {
             response.setNextUpdate(nextUpdate);
             response.setProducedAt(now);
 
-            // Lấy thông tin chi tiết
-            switch (status) {
-                case GOOD -> {
-                    response.setCertStatus("GOOD");
-                    response.setRevokedAt(null);
-                    response.setRevocationReason(null);
-                    log.info("OCSP response: serial={}, status=GOOD", certSerial);
-                    auditLog.info("OCSP_RESPONSE serial={} status=GOOD", certSerial);
+            // Kiểm tra trạng thái chi tiết bằng if-else để tránh lỗi NoClassDefFoundError trên synthetic class ($1)
+            if (status == CertStatus.GOOD) {
+                response.setCertStatus("GOOD");
+                response.setRevokedAt(null);
+                response.setRevocationReason(null);
+                log.info("OCSP response: serial={}, status=GOOD", certSerial);
+                auditLog.info("OCSP_RESPONSE serial={} status=GOOD", certSerial);
+            } else if (status == CertStatus.REVOKED) {
+                response.setCertStatus("REVOKED");
+                var certInfo = certStorage.getCertificateInfo(certSerial);
+                if (certInfo.isPresent()) {
+                    CertificateInfo info = certInfo.get();
+                    response.setRevokedAt(info.revocationTime);
+                    response.setRevocationReason(
+                            info.revocationReason != null ? info.revocationReason : "unspecified");
                 }
-
-                case REVOKED -> {
-                    response.setCertStatus("REVOKED");
-                    var certInfo = certStorage.getCertificateInfo(certSerial);
-                    if (certInfo.isPresent()) {
-                        CertificateInfo info = certInfo.get();
-                        response.setRevokedAt(info.revocationTime);
-                        response.setRevocationReason(
-                                info.revocationReason != null ? info.revocationReason : "unspecified");
-                    }
-                    log.warn("OCSP response: serial={}, status=REVOKED, reason={}",
-                            certSerial, response.getRevocationReason());
-                    auditLog.warn("OCSP_RESPONSE serial={} status=REVOKED reason={}",
-                            certSerial, response.getRevocationReason());
-                }
-
-                case UNKNOWN -> {
-                    response.setCertStatus("UNKNOWN");
-                    response.setRevokedAt(null);
-                    response.setRevocationReason(null);
-                    log.warn("OCSP response: serial={}, status=UNKNOWN", certSerial);
-                    auditLog.warn("OCSP_RESPONSE serial={} status=UNKNOWN", certSerial);
-                }
+                log.warn("OCSP response: serial={}, status=REVOKED, reason={}",
+                        certSerial, response.getRevocationReason());
+                auditLog.warn("OCSP_RESPONSE serial={} status=REVOKED reason={}",
+                        certSerial, response.getRevocationReason());
+            } else {
+                response.setCertStatus("UNKNOWN");
+                response.setRevokedAt(null);
+                response.setRevocationReason(null);
+                log.warn("OCSP response: serial={}, status=UNKNOWN", certSerial);
+                auditLog.warn("OCSP_RESPONSE serial={} status=UNKNOWN", certSerial);
             }
 
             // Ký OCSP response (dùng SHA256withRSA)
