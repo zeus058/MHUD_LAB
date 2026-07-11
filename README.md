@@ -18,12 +18,12 @@
 *   **Thiết kế kiến trúc hệ thống:** Lên ý tưởng, định hình mô hình tương tác giữa Client - CA - KDC - Chat Server.
 *   **Core Cryptography (shared-lib):** Xây dựng lõi mật mã đối xứng AES-256-GCM (đảm bảo tính bí mật và toàn vẹn), chữ ký số ECDSA (xác thực danh tính) và giao thức bắt tay trao đổi khóa Diffie-Hellman tạm thời (ECDHE) qua khóa Elliptic Curve.
 *   **KDC Server (kdc-server):**
-    *   **Cổng AS (Authentication Service):** Xác thực chữ ký số người dùng dựa trên mật khẩu và chứng chỉ số X.509, sinh khóa phiên tạm thời và cấp Vé nhận dạng (TGT).
+    *   **Cổng AS (Authentication Service):** Xác thực chữ ký số người dùng dựa trên mật khẩu và chứng chỉ số X.509, sinh session key tạm thời và cấp Vé nhận dạng (TGT).
     *   **Cổng TGS (Ticket Granting Service):** Xác thực TGT và Authenticator nhận được từ Client để cấp Vé dịch vụ (Service Ticket - ST) kết nối Chat Server.
 *   **Cơ chế Chống Replay & Phân quyền:** Thiết kế cơ chế lọc Replay Attack sử dụng Nonce Cache kết hợp sai lệch Timestamp, tích hợp trường `Control Vector` vào ST để thực hiện phân quyền người dùng (Role-Based Access Control).
 
 #### 2. Anh Tuấn (23120184) - PKI Infrastructure & CA Developer
-*   **Thiết kế Root CA (ca-server):** Xây dựng hệ thống Certificate Authority để quản lý vòng đời chứng chỉ khóa công khai. Khởi tạo cặp khóa ECDSA cho CA và sinh tệp chứng chỉ Root CA tự ký tin cậy.
+*   **Thiết kế Root CA (ca-server):** Xây dựng hệ thống Certificate Authority để quản lý vòng đời chứng chỉ public key. Khởi tạo cặp private/public key ECDSA cho CA và sinh tệp chứng chỉ Root CA tự ký tin cậy.
 *   **Certificate Authority Service:** Phát triển các API cho phép Client đăng ký tài khoản, gửi yêu cầu ký chứng chỉ số (CSR) và CA tự động cấp phát chứng chỉ định dạng X.509.
 *   **OCSP Responder:** Triển khai dịch vụ xác thực trạng thái chứng chỉ số trực tuyến qua giao thức OCSP (Online Certificate Status Protocol) giúp các Server (KDC, Chat) kiểm tra trạng thái chứng chỉ của Client theo thời gian thực.
 *   **Thu hồi chứng chỉ (Revocation System):** Xây dựng API gửi yêu cầu thu hồi (Revoke Request) kèm chữ ký số xác thực để hủy bỏ chứng chỉ khi người dùng bị lộ khóa bí mật hoặc thay đổi khóa.
@@ -36,8 +36,8 @@
 
 #### 4. Trúc Ngọc (23120148) - UI/UX Designer & Client Integration Tester
 *   **Thiết kế Giao diện người dùng (client-app):** Thiết kế toàn bộ giao diện bằng Java Swing hiện đại theo phong cách Figma (Darkmode sang trọng, Layout chia cột 64/36, hiệu ứng tương tác nút bấm, khung chat động và thanh thông báo tiến trình hoạt động Activity Flow).
-*   **Quản lý Khóa cục bộ & Client Crypto:** Tích hợp logic nạp/xuất khóa bảo mật từ tệp PKCS12 (`.pfx`) cục bộ tại Client, xây dựng cache quản lý vé tạm thời (Ticket Cache) tại Client để thực hiện Single Sign-On (SSO).
-*   **Tính năng Truyền File E2EE:** Thiết kế giao diện và xử lý logic chia tệp tin thành các khối chunk 512KB, mã hóa từng chunk bằng AES-GCM với khóa phiên sinh ngẫu nhiên (Zero-Knowledge) trước khi gửi qua Chat Server.
+*   **Quản lý Khóa cục bộ & Client Crypto:** Tích hợp logic nạp/xuất private key từ tệp PKCS12 (`.pfx`) cục bộ tại Client, xây dựng cache quản lý vé tạm thời (Ticket Cache) tại Client để thực hiện Single Sign-On (SSO).
+*   **Tính năng Truyền File E2EE:** Thiết kế giao diện và xử lý logic chia tệp tin thành các khối chunk 512KB, mã hóa từng chunk bằng AES-GCM với session key sinh ngẫu nhiên (Zero-Knowledge) trước khi gửi qua Chat Server.
 *   **Kịch bản kiểm thử (JUnit Testing):** Xây dựng và thực thi 45 kịch bản kiểm thử tích hợp tự động kiểm tra tính chính xác của các thuật toán mã hóa, bắt tay Kerberos, xác thực OCSP và chống tấn công Replay.
 
 ---
@@ -47,7 +47,7 @@
 ### 1.1. Sự bùng nổ của mạng diện rộng (WAN) và các rủi ro bảo mật cốt lõi
 Trong kỷ nguyên kết nối internet toàn cầu, các giao dịch và thông tin truyền thông phần lớn đều đi qua các mạng diện rộng (WAN). Do bản chất của mạng WAN là tập hợp của vô số các nút mạng trung gian (routers, switch, nhà cung cấp dịch vụ ISP) không đáng tin cậy, dữ liệu truyền đi phải đối mặt với các nguy cơ an ninh nghiêm trọng:
 *   **Nghe lén dữ liệu (Eavesdropping):** Kẻ tấn công sử dụng các công cụ bắt gói tin (packet sniffers) trên các đường truyền Wi-Fi công cộng hoặc các đường cáp trung gian để thu thập toàn bộ dữ liệu dưới dạng văn bản rõ (plaintext).
-*   **Tấn công xen giữa (Man-in-the-Middle - MITM):** Kẻ tấn công giả danh các thực thể hợp lệ (như giả mạo Router hoặc Server dịch vụ) để can thiệp vào luồng dữ liệu, đánh cắp khóa phiên hoặc thay đổi nội dung tin nhắn mà người dùng không hề hay biết.
+*   **Tấn công xen giữa (Man-in-the-Middle - MITM):** Kẻ tấn công giả danh các thực thể hợp lệ (như giả mạo Router hoặc Server dịch vụ) để can thiệp vào luồng dữ liệu, đánh cắp session key hoặc thay đổi nội dung tin nhắn mà người dùng không hề hay biết.
 *   **Tấn công phát lại (Replay Attack):** Hacker thu thập các gói tin chứa vé xác thực hợp lệ trên mạng truyền dẫn, sau đó phát lại (replay) các gói tin này lên máy chủ để chiếm quyền truy cập trái phép mà không cần biết thông tin đăng nhập.
 *   **Nghịch lý xác thực (Authentication Paradox):** Việc yêu cầu người dùng nhập mật khẩu lặp đi lặp lại qua mạng để truy cập các dịch vụ khác nhau làm tăng nguy cơ lộ mật khẩu qua đường truyền hoặc tạo cơ hội cho các cuộc tấn công brute-force trực tuyến.
 
@@ -62,7 +62,7 @@ Theo **Nguyên lý Kerckhoffs**, độ an toàn của một hệ thống mật m
 *   **Bùng nổ số lượng khóa:** Trong một mạng gồm $N$ người dùng, nếu chỉ sử dụng mã hóa khóa đối xứng truyền thống để mỗi cặp người dùng có một khóa riêng, tổng số khóa cần quản lý và phân phối sẽ tăng theo hàm lũy thừa:
     $$K = \frac{N \times (N - 1)}{2} = O(N^2)$$
     Khi số lượng người dùng lên tới hàng ngàn hoặc hàng triệu, việc lưu trữ và phân phối an toàn lượng khóa đối xứng khổng lồ này qua kênh truyền không an toàn là điều không khả thi.
-*   **Sự cần thiết của KDC và PKI:** Hệ thống cần một thực thể trung gian đáng tin cậy để phân phối khóa phiên động và xác thực nguồn gốc khóa công khai mà không làm bùng nổ số lượng khóa cần quản lý ở thiết bị đầu cuối.
+*   **Sự cần thiết của KDC và PKI:** Hệ thống cần một thực thể trung gian đáng tin cậy để phân phối session key động và xác thực nguồn gốc public key mà không làm bùng nổ số lượng khóa cần quản lý ở thiết bị đầu cuối.
 
 ---
 
@@ -70,21 +70,21 @@ Theo **Nguyên lý Kerckhoffs**, độ an toàn của một hệ thống mật m
 
 ### 2.1. Hạn chế của Kerberos V5 truyền thống
 Giao thức Kerberos V5 là một trong những chuẩn xác thực và phân phối khóa kinh điển trong mạng máy tính. Tuy nhiên, kiến trúc Kerberos V5 gốc tồn tại một số điểm yếu chí mạng khi áp dụng vào môi trường internet hiện đại:
-*   **Vấn đề lưu trữ mật mã tập trung tại KDC:** Kerberos truyền thống yêu cầu Trung tâm phân phối khóa (KDC) phải lưu trữ khóa bí mật dài hạn (Symmetric Long-term Key) của mọi thực thể, khóa này được phái sinh trực tiếp từ mật khẩu của người dùng. Do đó, KDC vô tình trở thành một "kho mật khẩu mật" tập trung. Nếu cơ sở dữ liệu của KDC bị tấn công hoặc quản trị viên hệ thống có hành vi gian lận, toàn bộ hệ thống sẽ lập tức sụp đổ.
-*   **Sự thiếu linh hoạt trong đăng ký mới:** Khi một người dùng mới muốn tham gia mạng lưới, họ bắt buộc phải thiết lập khóa dùng chung với KDC thông qua một kênh truyền vật lý an toàn (Out-of-band) trước khi có thể thực hiện xác thực trực tuyến. Điều này gây khó khăn lớn cho việc mở rộng quy mô ứng dụng trên internet.
-*   **Rủi ro từ việc phái sinh khóa yếu:** Khóa dài hạn của người dùng được phái sinh từ mật khẩu qua hàm băm đơn giản, dễ bị tấn công vét cạn ngoại tuyến (Offline Dictionary Attack) nếu kẻ tấn công bắt được gói tin bắt tay ban đầu.
+*   **Vấn đề lưu trữ mật mã tập trung tại KDC:** Kerberos truyền thống yêu cầu Trung tâm phân phối khóa (KDC) phải lưu trữ secret key dài hạn (Symmetric Long-term Key) của mọi thực thể, khóa này được phái sinh trực tiếp từ mật khẩu của người dùng. Do đó, KDC vô tình trở thành một "kho mật khẩu mật" tập trung. Nếu cơ sở dữ liệu của KDC bị tấn công hoặc quản trị viên hệ thống có hành vi gian lận, toàn bộ hệ thống sẽ lập tức sụp đổ.
+*   **Sự thiếu linh hoạt trong đăng ký mới:** Khi một người dùng mới muốn tham gia mạng lưới, họ bắt buộc phải thiết lập secret key dùng chung với KDC thông qua một kênh truyền vật lý an toàn (Out-of-band) trước khi có thể thực hiện xác thực trực tuyến. Điều này gây khó khăn lớn cho việc mở rộng quy mô ứng dụng trên internet.
+*   **Rủi ro từ việc phái sinh khóa yếu:** Secret key dài hạn của người dùng được phái sinh từ mật khẩu qua hàm băm đơn giản, dễ bị tấn công vét cạn ngoại tuyến (Offline Dictionary Attack) nếu kẻ tấn công bắt được gói tin bắt tay ban đầu.
 
-### 2.2. Giải pháp tích hợp Hạ tầng khóa công khai (PKI)
-Để khắc phục triệt để các hạn chế trên, dự án **SecureChat E2EE** tích hợp cơ chế PKINIT-like, kết hợp Hạ tầng khóa công khai (PKI) vào giao thức bắt tay của Kerberos:
-*   **Không lưu trữ mật khẩu trên máy chủ:** Thay vì lưu khóa phái sinh từ mật khẩu của người dùng, KDC chỉ lưu trữ chứng chỉ số công khai X.509 v3 (Public Key Certificate) của người dùng hoặc đơn giản là tin tưởng chữ ký của CA Gốc (Root CA).
-*   **Lưu trữ khóa bí mật độc quyền ở Client:** Khóa bí mật (Private Key) tương ứng với chứng chỉ chỉ nằm duy nhất trong vùng lưu trữ an toàn (Keystore PKCS12) tại thiết bị của Client.
-*   **Xác thực không cần truyền mật mã:** KDC xác thực Client dựa trên thuật toán chữ ký số bất đối xứng (ECDSA/RSA). Việc KDC bị tấn công cơ sở dữ liệu sẽ không làm rò rỉ bất kỳ thông tin nhạy cảm nào của người dùng, vì kẻ tấn công chỉ lấy được các chứng chỉ số công khai.
+### 2.2. Giải pháp tích hợp Hạ tầng public key (PKI)
+Để khắc phục triệt để các hạn chế trên, dự án **SecureChat E2EE** tích hợp cơ chế PKINIT-like, kết hợp Hạ tầng public key (PKI) vào giao thức bắt tay của Kerberos:
+*   **Không lưu trữ mật khẩu trên máy chủ:** Thay vì lưu khóa phái sinh từ mật khẩu của người dùng, KDC chỉ lưu trữ chứng chỉ public key X.509 v3 (Public Key Certificate) của người dùng hoặc đơn giản là tin tưởng chữ ký của CA Gốc (Root CA).
+*   **Lưu trữ khóa bí mật độc quyền ở Client:** Private key tương ứng với chứng chỉ chỉ nằm duy nhất trong vùng lưu trữ an toàn (Keystore PKCS12) tại thiết bị của Client.
+*   **Xác thực không cần truyền mật mã:** KDC xác thực Client dựa trên thuật toán chữ ký số bất đối xứng (ECDSA/RSA). Việc KDC bị tấn công cơ sở dữ liệu sẽ không làm rò rỉ bất kỳ thông tin nhạy cảm nào của người dùng, vì kẻ tấn công chỉ lấy được các chứng chỉ public key.
 
 ### 2.3. Ưu điểm vượt trội của mô hình lai (Hybrid Architecture)
 Mô hình lai kết hợp Kerberos và PKI mang lại những lợi ích vượt trội về mặt bảo mật và hiệu năng vận hành:
-*   **Xác thực một lần (Single Sign-On - SSO):** Người dùng chỉ cần sử dụng khóa định danh cá nhân để xác thực với máy chủ AS một lần duy nhất để lấy vé TGT. Sau đó, vé TGT được dùng để xin vé dịch vụ (ST) cho các dịch vụ khác nhau (như Chat Server và Notification Server) mà không cần yêu cầu người dùng phải nhập lại thông tin xác thực.
-*   **Khả năng ủy quyền an toàn (Decentralized Delegation):** Khi Client kết nối tới Chat Server, nó chỉ cần trình Vé dịch vụ ST. Chat Server có thể tự giải mã vé ST bằng khóa bí mật của chính nó để lấy khóa phiên kết nối ($K_{Client-Chat}$), thực hiện xác thực Client mà không cần liên lạc ngược lại với KDC để truy vấn thông tin. Điều này giúp giảm tải mạng và tăng tốc độ xử lý của hệ thống.
-*   **Tối ưu hóa độ phức tạp quản lý khóa:** Nhờ máy chủ trung gian KDC làm nhiệm vụ phân phối khóa phiên, hệ thống giảm độ phức tạp phân phối khóa từ $O(N^2)$ xuống $O(N)$. Mỗi client chỉ cần quản lý duy nhất một cặp khóa định danh của chính mình.
+*   **Xác thực một lần (Single Sign-On - SSO):** Người dùng chỉ cần sử dụng private key định danh cá nhân để xác thực với máy chủ AS một lần duy nhất để lấy vé TGT. Sau đó, vé TGT được dùng để xin vé dịch vụ (ST) cho các dịch vụ khác nhau (như Chat Server và Notification Server) mà không cần yêu cầu người dùng phải nhập lại thông tin xác thực.
+*   **Khả năng ủy quyền an toàn (Decentralized Delegation):** Khi Client kết nối tới Chat Server, nó chỉ cần trình Vé dịch vụ ST. Chat Server có thể tự giải mã vé ST bằng private key của chính nó để lấy session key kết nối ($K_{Client-Chat}$), thực hiện xác thực Client mà không cần liên lạc ngược lại với KDC để truy vấn thông tin. Điều này giúp giảm tải mạng và tăng tốc độ xử lý của hệ thống.
+*   **Tối ưu hóa độ phức tạp quản lý khóa:** Nhờ máy chủ trung gian KDC làm nhiệm vụ phân phối session key, hệ thống giảm độ phức tạp phân phối khóa từ $O(N^2)$ xuống $O(N)$. Mỗi client chỉ cần quản lý duy nhất một cặp private/public key định danh của chính mình.
 
 ---
 
@@ -102,14 +102,14 @@ Hệ thống sử dụng mật mã đối xứng cho tất cả các tác vụ m
     *   *Authentication Tag (MAC) - 16 bytes:* Thẻ xác thực dùng để niêm phong tính toàn vẹn của cả IV và Ciphertext.
 
 ### 3.2. Thỏa thuận khóa động & Tính chất bảo mật chuyển tiếp hoàn hảo (PFS)
-Việc sử dụng một khóa phiên cố định lâu dài tiềm ẩn rủi ro lớn: nếu khóa bí mật của Server bị lộ trong tương lai, kẻ tấn công có thể giải mã toàn bộ dữ liệu đã thu thập từ quá khứ.
+Việc sử dụng một session key cố định lâu dài tiềm ẩn rủi ro lớn: nếu khóa bí mật của Server bị lộ trong tương lai, kẻ tấn công có thể giải mã toàn bộ dữ liệu đã thu thập từ quá khứ.
 *   **Bảo mật chuyển tiếp hoàn hảo (Perfect Forward Secrecy - PFS):** Nhóm thiết lập cơ chế PFS bằng cách thỏa thuận khóa động thông qua giao thức **ECDHE (Elliptic Curve Diffie-Hellman Ephemeral)** sử dụng đường cong chuẩn `secp256r1`.
-*   **Cơ chế hoạt động:** Cho mỗi phiên kết nối, hai bên tự sinh một cặp khóa ECDHE tạm thời (chỉ tồn tại trên RAM) và trao đổi khóa công khai cho nhau. Sau khi kết nối ngắt, các tham số khóa tạm thời này lập tức bị xóa sạch khỏi RAM. Kẻ tấn công có lấy được khóa bí mật RSA dài hạn của Server hay Client trong tương lai cũng không thể giải mã ngược lại các tin nhắn cũ.
+*   **Cơ chế hoạt động:** Cho mỗi phiên kết nối, hai bên tự sinh một cặp khóa ECDHE tạm thời (chỉ tồn tại trên RAM) và trao đổi public key cho nhau. Sau khi kết nối ngắt, các tham số khóa tạm thời này lập tức bị xóa sạch khỏi RAM. Kẻ tấn công có lấy được private key RSA dài hạn của Server hay Client trong tương lai cũng không thể giải mã ngược lại các tin nhắn cũ.
 *   **Hiệu năng vượt trội:** So với DHE truyền thống hoạt động trên trường số nguyên tố lớn (đòi hỏi chi phí tính toán cao), ECDHE dựa trên độ khó của bài toán logarit rời rạc trên đường cong Elliptic, giúp tính toán cực nhanh, giảm đáng kể thời gian bắt tay và tiết kiệm tài nguyên CPU của máy chủ.
 
 ### 3.3. Dẫn xuất khóa cục bộ & Bảo mật CSDL tĩnh
 Dữ liệu lịch sử chat và các vé lưu trữ tại Client cần được bảo vệ khi thiết bị bị tắt hoặc bị đánh cắp vật lý:
-*   **Thuật toán PBKDF2 (Password-Based Key Derivation Function 2):** Để mã hóa CSDL SQLite tĩnh (thông qua SQLCipher), nhóm sử dụng PBKDF2 để phái sinh mật khẩu người dùng thành khóa đối xứng AES-256 bits.
+*   **Thuật toán PBKDF2 (Password-Based Key Derivation Function 2):** Để mã hóa CSDL SQLite tĩnh (thông qua SQLCipher), nhóm sử dụng PBKDF2 để phái sinh mật khẩu người dùng thành secret key đối xứng AES-256 bits.
 *   **Cơ chế chống brute-force:** PBKDF2 kết hợp một chuỗi muối (Salt) ngẫu nhiên để chống lại tấn công Rainbow Table, và thiết lập số vòng lặp băm cực cao là **100,000 vòng lặp** (sử dụng HMAC-SHA256 làm hàm giả ngẫu nhiên PRF). Việc này làm tăng chi phí tính toán thử sai của kẻ tấn công lên hàng triệu lần, khiến việc tấn công dò mật khẩu bằng siêu máy tính trở nên bất khả thi về mặt chi phí và thời gian.
 
 ### 3.4. Giao thức tối ưu hiệu năng
@@ -178,18 +178,18 @@ graph TD
 | Mức độ | Yêu cầu Kỹ thuật từ Giảng viên | Đạt | Giải thích Giải pháp Kỹ thuật trong Dự án |
 | :---: | :--- | :---: | :--- |
 | **Cơ bản** | Mã hóa dữ liệu bằng symmetric encryption | ✓ | Nội dung tin nhắn và file được mã hóa đối xứng bằng thuật toán **AES-256-GCM** (chế độ AEAD đảm bảo tính bí mật và tính toàn vẹn). |
-| **Cơ bản** | Dùng hybrid encryption để phân phối khóa phiên hoặc KDC ở mức cơ bản | ✓ | Tích hợp kiến trúc KDC cấp khóa phiên thông qua cấu trúc Vé. AS dùng khóa công khai RSA của Client trong chứng chỉ để mã hóa bọc khóa phiên kết nối TGS. |
-| **Cơ bản** | Có key lifecycle: sinh khóa, phân phối, thời hạn, thay khóa | ✓ | Vòng đời khóa được quản lý khép kín: Client tự sinh khóa định danh; khóa phiên được phân phối qua vé Kerberos; Vé TGT và ST có thời hạn sử dụng cố định và được tự động thay thế liên tục qua giao thức ECDHE động cho mỗi phiên kết nối. |
+| **Cơ bản** | Dùng hybrid encryption để phân phối session key hoặc KDC ở mức cơ bản | ✓ | Tích hợp kiến trúc KDC cấp session key thông qua cấu trúc Vé. AS dùng public key RSA của Client trong chứng chỉ để mã hóa bọc session key kết nối TGS. |
+| **Cơ bản** | Có key lifecycle: sinh khóa, phân phối, thời hạn, thay khóa | ✓ | Vòng đời khóa được quản lý khép kín: Client tự sinh private key định danh; session key được phân phối qua vé Kerberos; Vé TGT và ST có thời hạn sử dụng cố định và được tự động thay thế liên tục qua giao thức ECDHE động cho mỗi phiên kết nối. |
 | **Cơ bản** | Có xác thực người dùng: identification + verification | ✓ | Định danh qua trường `clientId` và xác thực thông qua chữ ký số thách thức (Proof-of-Possession) ký bởi khóa bí mật RSA của Client thay vị truyền mật khẩu bản rõ qua mạng. |
 | **Cơ bản** | Có chống replay bằng nonce/timestamp/challenge-response | ✓ | Mọi Authenticator gửi kèm vé đều chứa `timestamp` (giới hạn sai lệch tối đa 300 giây) kết hợp kiểm tra tính duy nhất qua bộ đệm `Nonce Cache`. |
-| **Cơ bản** | Có xác thực nguồn khóa công khai: tối thiểu qua trusted public key / certificate đơn giản | ✓ | Sử dụng tệp tin Keystore PKCS12 (`.pfx`) cục bộ để lưu trữ và thẩm định chuỗi chứng chỉ X.509 liên kết ngược lên CA Gốc đáng tin cậy. |
-| **Mức khá** | Tách rõ master key và session key | ✓ | Phân biệt rạch ròi giữa **Khóa định danh bất đối xứng dài hạn (Asymmetric Identity Key RSA-2048)** lưu trong Keystore và **Khóa phiên đối xứng tạm thời (Symmetric Session Key AES-256)** chỉ lưu trên RAM. |
+| **Cơ bản** | Có xác thực nguồn public key: tối thiểu qua trusted public key / certificate đơn giản | ✓ | Sử dụng tệp tin Keystore PKCS12 (`.pfx`) cục bộ để lưu trữ và thẩm định chuỗi chứng chỉ X.509 liên kết ngược lên CA Gốc đáng tin cậy. |
+| **Mức khá** | Tách rõ master key và session key | ✓ | Phân biệt rạch ròi giữa **Private key định danh bất đối xứng dài hạn (Asymmetric Identity Key RSA-2048)** lưu trong Keystore và **Session key đối xứng tạm thời (Symmetric Session Key AES-256)** chỉ lưu trên RAM. |
 | **Mức khá** | Có KDC/KMS hoặc dịch vụ quản lý khóa tập trung | ✓ | Tách cụm dịch vụ KDC thành 2 cổng độc lập: AS (Authentication Service) và TGS (Ticket Granting Service) quản lý tập trung. |
 | **Mức khá** | Có mutual authentication client–server | ✓ | Xác thực hai chiều toàn diện: Client tin cưởng Chat Server nhờ chứng chỉ số X.509 của Server; Chat Server kiểm soát quyền kết nối của Client thông qua việc giải mã Vé ST và Authenticator. |
 | **Mức khá** | Có phân quyền truy cập dựa trên identity đã xác thực | ✓ | KDC chèn thuộc tính quyền hạn (Control Vector) vào trong Vé ST. Chat Server kiểm tra Control Vector trước khi cho phép Client tham gia kênh chat tương ứng. |
 | **Mức khá** | Dùng X.509 certificate | ✓ | Toàn bộ các thực thể trong hệ thống đều được cấp chứng chỉ X.509 v3 do CA Gốc nội bộ ký nhận dạng. |
 | **Mức khá** | Có revocation: CRL hoặc cơ chế tương đương | ✓ | Triển khai giao thức xác thực trạng thái chứng chỉ số trực tuyến **OCSP** trực tiếp tại CA Server, giúp các server kiểm tra thu hồi chứng chỉ của Client tức thời. |
-| **Mức khá** | Có cơ chế bảo vệ khỏi MITM khi trao đổi khóa công khai | ✓ | Mọi hoạt động thỏa thuận khóa (như ECDHE) đều đi kèm chữ ký số xác thực được ký bởi khóa bí mật RSA tương ứng với chứng chỉ X.509 hợp lệ. |
+| **Mức khá** | Có cơ chế bảo vệ khỏi MITM khi trao đổi public key | ✓ | Mọi hoạt động thỏa thuận khóa (như ECDHE) đều đi kèm chữ ký số xác thực được ký bởi khóa bí mật RSA tương ứng với chứng chỉ X.509 hợp lệ. |
 | **Nâng cao** | Có PKI tương đối đầy đủ: CA, RA, repository, quy trình đăng ký / cấp / thu hồi certificate | ✓ | Vận hành đầy đủ quy trình PKI: Sinh CSR tại Client $\rightarrow$ Gửi lên CA $\rightarrow$ CA phê duyệt và ký cấp chứng chỉ số dạng `.crt` $\rightarrow$ Hỗ trợ API thu hồi (Revoke Request) có chữ ký xác thực. |
 | **Nâng cao** | Có certificate chain validation | ✓ | Client và các Server thực hiện kiểm tra chữ ký số của từng mắt xích trong chuỗi chứng chỉ (Certificate Chain Validation) ngược lên tới Root CA. |
 | **Nâng cao** | Có Kerberos-like ticketing hoặc SSO cho nhiều dịch vụ nội bộ | ✓ | Thiết kế cơ chế Single Sign-On (SSO): Client chỉ cần xin vé TGT từ AS 1 lần duy nhất, sau đó dùng TGT để xin vé ST kết nối đồng thời tới Chat Server và Notification Server mà không cần xác thực lại. |
@@ -200,7 +200,7 @@ graph TD
 ## CHƯƠNG 6: GIAO THỨC TRAO ĐỔI KHÓA & TRUYỀN THÔNG TIN E2EE
 
 ### 6.1. Giai đoạn 1: Đăng ký định danh & Thiết lập Trust Anchor (Hạ tầng PKI)
-Mục tiêu cốt lõi của giai đoạn này là tạo lập lòng tin ban đầu (Trust Anchor) bằng cách gắn kết danh tính người dùng (Client A) với khóa công khai thông qua chứng chỉ số X.509 v3 do máy chủ CA cấp phát:
+Mục tiêu cốt lõi của giai đoạn này là tạo lập lòng tin ban đầu (Trust Anchor) bằng cách gắn kết danh tính người dùng (Client A) với public key thông qua chứng chỉ số X.509 v3 do máy chủ CA cấp phát:
 
 ```mermaid
 sequenceDiagram
@@ -215,12 +215,12 @@ sequenceDiagram
     Note over Client A: Cất giữ an toàn PR_a trong Keystore PKCS12 (.pfx)<br/>Lưu trữ Cert_A để bắt tay
 ```
 
-1.  **Khởi tạo cặp khóa:** Client A tự sinh ngẫu nhiên cặp khóa định danh RSA-2048 gồm khóa công khai $PU_a$ và khóa riêng tư $PR_a$. Khóa riêng tư được bảo vệ nghiêm ngặt bằng mật khẩu trong Keystore PKCS12 cục bộ.
-2.  **Yêu cầu cấp chứng chỉ (CSR):** Client A đóng gói thông tin định danh và khóa công khai $PU_a$ thành tệp tin Yêu cầu ký chứng chỉ (CSR - Certificate Signing Request), ký số lên CSR bằng khóa riêng tư của mình để chứng minh quyền sở hữu (Proof-of-Possession), và gửi lên CA Server.
-3.  **Ký duyệt và Cấp phát:** Máy chủ CA xác thực CSR, ký số chứng thực bằng khóa riêng tư của CA ($PR_{CA}$) và tạo chứng chỉ X.509 v3 ($Cert_A$), gửi trả về cho Client cùng chuỗi chứng chỉ CA Gốc để Client lưu vào TrustStore nội bộ.
+1.  **Khởi tạo cặp khóa:** Client A tự sinh ngẫu nhiên cặp private/public key định danh RSA-2048 gồm public key $PU_a$ và private key $PR_a$. Private key được bảo vệ nghiêm ngặt bằng mật khẩu trong Keystore PKCS12 cục bộ.
+2.  **Yêu cầu cấp chứng chỉ (CSR):** Client A đóng gói thông tin định danh và public key $PU_a$ thành tệp tin Yêu cầu ký chứng chỉ (CSR - Certificate Signing Request), ký số lên CSR bằng private key của mình để chứng minh quyền sở hữu (Proof-of-Possession), và gửi lên CA Server.
+3.  **Ký duyệt và Cấp phát:** Máy chủ CA xác thực CSR, ký số chứng thực bằng private key của CA ($PR_{CA}$) và tạo chứng chỉ X.509 v3 ($Cert_A$), gửi trả về cho Client cùng chuỗi chứng chỉ CA Gốc để Client lưu vào TrustStore nội bộ.
 
 ### 6.2. Giai đoạn 2: Xác thực ban đầu và cấp vé TGT (Authentication Service - AS)
-Client liên hệ với cổng AS của KDC để đăng nhập một lần (SSO) và nhận Vé nhận dạng (TGT - Ticket Granting Ticket) cùng khóa phiên trung gian:
+Client liên hệ với cổng AS của KDC để đăng nhập một lần (SSO) và nhận Vé nhận dạng (TGT - Ticket Granting Ticket) cùng session key trung gian:
 
 ```mermaid
 sequenceDiagram
@@ -233,14 +233,14 @@ sequenceDiagram
     Note over AS: Xác thực chữ ký số Client trên nonce + timestamp (PoP)<br/>Truy vấn OCSP trạng thái Cert_A
     AS->>CA: Yêu cầu kiểm tra trạng thái Cert_A
     CA-->>AS: Trả về trạng thái (GOOD / REVOKED)
-    Note over AS: Sinh khóa phiên K_Client-TGS<br/>Tạo vé TGT chứa K_Client-TGS (mã hóa bằng khóa KDC)<br/>Mã hóa TgtResponse bằng khóa công khai Client (PU_a)
+    Note over AS: Sinh session key K_Client-TGS<br/>Tạo vé TGT chứa K_Client-TGS (mã hóa bằng khóa KDC)<br/>Mã hóa TgtResponse bằng public key Client (PU_a)
     AS-->>Client: Trả về TgtResponse (Vé TGT + K_Client-TGS mã hóa)
     Note over Client: Dùng PR_a để giải mã lấy K_Client-TGS và vé TGT<br/>Xác minh Nonce để chống phát lại
 ```
 
 *   **Chữ ký Proof-of-Possession (PoP):** Để đăng nhập, Client tạo `TgtRequest` chứa các trường `clientId`, `targetTgs`, `nonce`, chứng chỉ `Cert_A`, và một `timestamp` từ máy chủ thời gian NTP. Client ký số thách thức lên dữ liệu này bằng $PR_a$ trước khi gửi đi.
 *   **Xác thực và Kiểm tra trạng thái OCSP:** AS nhận yêu cầu, trích xuất $PU_a$ từ `Cert_A` để xác minh chữ ký số của Client (PoP thành công). Đồng thời, AS gửi truy vấn thời gian thực lên CA Server qua giao thức OCSP để xác nhận chứng chỉ này chưa bị thu hồi.
-*   **Cấp vé TGT:** Nếu chứng chỉ hợp lệ, AS sinh khóa phiên trung gian $K_{Client-TGS}$, đóng gói vé TGT chứa ($clientId$, $targetTgs$, $timestamp$, $expiresAt$, $K_{Client-TGS}$) được mã hóa bằng khóa bí mật của KDC. AS gửi trả phản hồi gồm vé TGT và khóa $K_{Client-TGS}$ được mã hóa bằng khóa công khai $PU_a$ của Client để đảm bảo tính bí mật tối đa.
+*   **Cấp vé TGT:** Nếu chứng chỉ hợp lệ, AS sinh session key trung gian $K_{Client-TGS}$, đóng gói vé TGT chứa ($clientId$, $targetTgs$, $timestamp$, $expiresAt$, $K_{Client-TGS}$) được mã hóa bằng secret key của KDC. AS gửi trả phản hồi gồm vé TGT và khóa $K_{Client-TGS}$ được mã hóa bằng public key $PU_a$ của Client để đảm bảo tính bí mật tối đa.
 
 ### 6.3. Giai đoạn 3: Cấp Vé dịch vụ (Ticket Granting Service - TGS)
 Client sử dụng vé TGT thu được để xin Vé dịch vụ (Service Ticket - ST) kết nối tới Chat Server từ cổng TGS:
@@ -253,13 +253,13 @@ sequenceDiagram
     
     Note over Client: Tạo Authenticator = Enc(K_Client-TGS, [ClientId, Timestamp, Nonce])<br/>Ký lên (TGT || Authenticator || TargetServer) -> Signature
     Client->>TGS: Gửi StRequest (TGT, Authenticator, TargetServer, Nonce, Signature)
-    Note over TGS: Giải mã TGT lấy K_Client-TGS<br/>Giải mã Authenticator kiểm tra Timestamp (Replay Defense)<br/>Xác thực chữ ký số Client (PoP)<br/>Sinh khóa phiên Chat K_Client-Chat<br/>Tạo Vé ST chứa K_Client-Chat và Control Vector (mã hóa bằng khóa ChatServer)
+    Note over TGS: Giải mã TGT lấy K_Client-TGS<br/>Giải mã Authenticator kiểm tra Timestamp (Replay Defense)<br/>Xác thực chữ ký số Client (PoP)<br/>Sinh session key Chat K_Client-Chat<br/>Tạo Vé ST chứa K_Client-Chat và Control Vector (mã hóa bằng khóa ChatServer)
     TGS-->>Client: Trả về StResponse (Vé ST + K_Client-Chat mã hóa bằng K_Client-TGS)
 ```
 
-1.  **Tạo Authenticator:** Client sử dụng khóa phiên $K_{Client-TGS}$ để mã hóa một thẻ xác thực Authenticator chứa định danh và timestamp.
+1.  **Tạo Authenticator:** Client sử dụng session key $K_{Client-TGS}$ để mã hóa một thẻ xác thực Authenticator chứa định danh và timestamp.
 2.  **Yêu cầu ST:** Client gửi `StRequest` gồm vé TGT, thẻ Authenticator, định danh máy chủ đích (`TargetServer`), số `nonce` và chữ ký số ký trên toàn bộ các tham số này để chứng thực quyền sở hữu (Proof-of-Possession).
-3.  **Kiểm tra và Cấp vé ST:** TGS giải mã vé TGT bằng khóa bí mật của KDC để lấy khóa phiên $K_{Client-TGS}$, giải mã Authenticator để xác thực danh tính người dùng và kiểm tra Replay Attack. Tiếp theo, TGS sinh khóa phiên nhắn tin $K_{Client-Chat}$ và tạo vé dịch vụ ST chứa các thông tin này cùng quyền hạn hạn chế (`Control Vector`), tất cả được mã hóa bằng khóa bí mật của Chat Server.
+3.  **Kiểm tra và Cấp vé ST:** TGS giải mã vé TGT bằng secret key của KDC để lấy session key $K_{Client-TGS}$, giải mã Authenticator để xác thực danh tính người dùng và kiểm tra Replay Attack. Tiếp theo, TGS sinh session key nhắn tin $K_{Client-Chat}$ và tạo vé dịch vụ ST chứa các thông tin này cùng quyền hạn hạn chế (`Control Vector`), tất cả được mã hóa bằng private key của Chat Server.
 
 ### 6.4. Giai đoạn 4: Đăng nhập Chat, Xác thực hai chiều & Thiết lập kênh E2EE
 Client trình vé dịch vụ ST lên Chat Server để đăng nhập, thực hiện xác thực hai chiều (Mutual Authentication) và bắt tay thiết lập kênh mã hóa:
@@ -285,24 +285,24 @@ sequenceDiagram
     Note over Bob: Giải mã gói tin bằng khóa E2EE tự tính toán
 ```
 
-*   **Đăng nhập và Mutual Authentication:** Client gửi `ChatHandshakeRequest` chứa vé ST, thẻ Authenticator mã hóa bằng $K_{Client-Chat}$ và chứng chỉ `Cert_Client` lên Chat Server. Chat Server giải mã ST lấy khóa phiên, giải mã Authenticator để xác minh Client. Đồng thời, Server gửi về một phản hồi thử thách được ký bằng khóa riêng tư của Chat Server và mã hóa bằng $K_{Client-Chat}$ để Client xác thực ngược lại danh tính của máy chủ (Mutual Authentication hoàn tất).
-*   **Bắt tay trao đổi khóa E2EE:** Alice và Bob trao đổi các tham số khóa công khai tạm thời trực tiếp thông qua Chat Server. Các tham số này được ký số bằng khóa riêng tư RSA của mỗi bên để chống MITM. Alice và Bob tự tính toán ra khóa bí mật dùng chung động (Double Ratchet / ECDHE) độc lập ngay tại RAM của Client.
-*   **Truyền tin nhắn Zero-Knowledge:** Khi Alice gửi tin nhắn cho Bob, nội dung tin nhắn được mã hóa AES-256-GCM bằng khóa E2EE này. Chat Server chỉ đóng vai trò định tuyến gói tin [EncryptedChatEnvelope.java](file:///d:/MHUD/PROJECT/src/shared-lib/src/main/java/vn/edu/hcmus/securechat/common/protocol/dto/EncryptedChatEnvelope.java) nhị phân từ Alice tới Bob mà hoàn toàn không sở hữu khóa giải mã, đảm bảo tính chất **Zero-Knowledge** tuyệt đối.
+*   **Đăng nhập và Mutual Authentication:** Client gửi `ChatHandshakeRequest` chứa vé ST, thẻ Authenticator mã hóa bằng $K_{Client-Chat}$ và chứng chỉ `Cert_Client` lên Chat Server. Chat Server giải mã ST lấy session key, giải mã Authenticator để xác minh Client. Đồng thời, Server gửi về một phản hồi thử thách được ký bằng private key của Chat Server và mã hóa bằng $K_{Client-Chat}$ để Client xác thực ngược lại danh tính của máy chủ (Mutual Authentication hoàn tất).
+*   **Bắt tay trao đổi khóa E2EE:** Alice và Bob trao đổi các tham số public key tạm thời trực tiếp thông qua Chat Server. Các tham số này được ký số bằng private key RSA của mỗi bên để chống MITM. Alice và Bob tự tính toán ra secret key dùng chung động (Double Ratchet / ECDHE) độc lập ngay tại RAM của Client.
+*   **Truyền tin nhắn Zero-Knowledge:** Khi Alice gửi tin nhắn cho Bob, nội dung tin nhắn được mã hóa AES-256-GCM bằng khóa E2EE này. Chat Server chỉ đóng vai trò định tuyến gói tin [EncryptedChatEnvelope.java](file:///d:/MHUD/PROJECT/src/shared-lib/src/main/java/vn/edu/hcmus/securechat/common/protocol/dto/EncryptedChatEnvelope.java) nhị phân từ Alice tới Bob mà hoàn toàn không sở hữu private key để giải mã, đảm bảo tính chất **Zero-Knowledge** tuyệt đối.
 
 ---
 
 ## CHƯƠNG 7: PHÂN TÍCH CÁC KỊCH BẢN TẤN CÔNG & CƠ CHẾ PHÒNG THỦ
 
-### 7.1. Tấn công xen giữa (Man-in-the-Middle - MITM) khi trao đổi khóa công khai
-*   **Kịch bản tấn công:** Kẻ tấn công đứng giữa Alice và Bob trên mạng Wi-Fi công cộng, cố tình tráo đổi khóa công khai ECDHE tạm thời của hai bên bằng khóa công khai của chính nó, nhằm giải mã tin nhắn trung chuyển.
-*   **Cơ chế phòng thủ:** Mọi tham số khóa công khai ECDHE trao đổi đều được ký số bằng khóa bí mật RSA của người gửi. Alice luôn xác thực chữ ký của Bob bằng khóa công khai lấy từ chứng chỉ `Cert_Bob` đã được ký bởi CA Gốc tin cậy. Bất kỳ sự thay đổi tham số nào từ kẻ tấn công đứng giữa sẽ làm chữ ký số không khớp, Client phát hiện lập tức ngắt kết nối.
+### 7.1. Tấn công xen giữa (Man-in-the-Middle - MITM) khi trao đổi public key
+*   **Kịch bản tấn công:** Kẻ tấn công đứng giữa Alice và Bob trên mạng Wi-Fi công cộng, cố tình tráo đổi public key ECDHE tạm thời của hai bên bằng public key của chính nó, nhằm giải mã tin nhắn trung chuyển.
+*   **Cơ chế phòng thủ:** Mọi tham số public key ECDHE trao đổi đều được ký số bằng khóa bí mật RSA của người gửi. Alice luôn xác thực chữ ký của Bob bằng public key lấy từ chứng chỉ `Cert_Bob` đã được ký bởi CA Gốc tin cậy. Bất kỳ sự thay đổi tham số nào từ kẻ tấn công đứng giữa sẽ làm chữ ký số không khớp, Client phát hiện lập tức ngắt kết nối.
 
 ### 7.2. Tấn công phát lại (Replay Attack) & Đánh cắp vé
 *   **Kịch bản tấn công:** Kẻ tấn công bắt gói tin chứa Vé TGT/ST và Authenticator hợp lệ gửi trên đường truyền, sau đó gửi lại gói tin này lên máy chủ dịch vụ để đăng nhập trái phép.
 *   **Cơ chế phòng thủ:**
     *   *Giới hạn Timestamp:* Server chỉ chấp nhận các gói tin Authenticator có sai lệch thời gian so với giờ mạng chuẩn (NTP) dưới 300 giây.
     *   *Bộ đệm Nonce Cache phức hợp:* Các server AS, TGS và Chat Server duy trì bộ đệm [NonceCache.java](file:///d:/MHUD/PROJECT/src/shared-lib/src/main/java/vn/edu/hcmus/securechat/common/crypto/NonceCache.java) để lưu trữ khóa phức hợp dạng `(client_id, authenticator_timestamp, nonce/session_id)` trong thời gian hiệu lực của vé. Yêu cầu trùng lặp khóa phức hợp sẽ bị hệ thống phát hiện và từ chối lập tức.
-    *   *Chữ ký Proof-of-Possession:* Mọi request gửi lên AS/TGS đều có chữ ký số của Client trên nonce và timestamp, kẻ tấn công dù trộm được vé cũng không thể giả mạo chữ ký số này do không có khóa riêng tư RSA cá nhân của người dùng.
+    *   *Chữ ký Proof-of-Possession:* Mọi request gửi lên AS/TGS đều có chữ ký số của Client trên nonce và timestamp, kẻ tấn công dù trộm được vé cũng không thể giả mạo chữ ký số này do không có private key RSA cá nhân của người dùng.
 
 ### 7.3. Tấn công ngoại tuyến cơ sở dữ liệu (Offline Database Attack)
 *   **Kịch bản tấn công:** Kẻ tấn công cắm USB độc hại để sao chép trộm tệp cơ sở dữ liệu chứa tin nhắn và cấu hình trên máy tính của người dùng hoặc máy chủ.
@@ -317,7 +317,7 @@ sequenceDiagram
 ## CHƯƠNG 8: QUYẾT ĐỊNH KỸ THUẬT & CÁC THAY ĐỔI QUAN TRỌNG
 
 Nhóm đã thực hiện các cải tiến kỹ thuật quan trọng để nâng cao tính khả dụng và khả năng tương thích của dự án:
-*   **Di chuyển KeyStore đa nền tảng (Cross-Platform PKCS12):** Loại bỏ hoàn toàn sự phụ thuộc vào thư viện bảo mật Windows (`SunMSCAPI`/DPAPI). Toàn bộ khóa riêng tư và chứng chỉ được lưu trữ dưới định dạng PKCS12 tiêu chuẩn (`.pfx`) đặt dưới thư mục dữ liệu dự án, giúp ứng dụng chạy mượt mà trên **Windows, Linux và macOS**.
+*   **Di chuyển KeyStore đa nền tảng (Cross-Platform PKCS12):** Loại bỏ hoàn toàn sự phụ thuộc vào thư viện bảo mật Windows (`SunMSCAPI`/DPAPI). Toàn bộ private key và chứng chỉ được lưu trữ dưới định dạng PKCS12 tiêu chuẩn (`.pfx`) đặt dưới thư mục dữ liệu dự án, giúp ứng dụng chạy mượt mà trên **Windows, Linux và macOS**.
 *   **Cấu hình địa chỉ máy chủ động:** Thiết lập cơ chế đọc file cấu hình máy chủ `config.properties` đặt tại thư mục thực thi. Hệ thống ưu tiên đọc cấu hình từ: *Tham số JVM `-D` > File `config.properties` ngoài > Địa chỉ Azure IP mặc định (`70.153.139.17`)*.
 *   **Đóng gói Standalone bằng jpackage:** Ứng dụng Client được đóng gói trực tiếp thành thư mục chứa tệp tin thực thi `SecureChat.exe` và máy ảo Java rút gọn đi kèm. Người dùng cuối chỉ cần giải nén tệp zip và chạy trực tiếp ứng dụng mà không cần phải cài đặt môi trường Java trên hệ điều hành.
 
@@ -386,7 +386,7 @@ mvn exec:java -pl client-app -Dca.host=127.0.0.1 -Das.host=127.0.0.1 -Dchat.host
 ## CHƯƠNG 12: ĐỊNH HƯỚNG PHÁT TRIỂN TƯƠNG LAI
 Để tăng cường khả năng bảo mật trước sự phát triển của công nghệ máy tính lượng tử trong tương lai, nhóm định hướng tích hợp **Mật mã Kháng Lượng tử lai (Hybrid PQC)**:
 1.  **Tích hợp thuật toán đóng gói khóa Kyber (ML-KEM):** Kết hợp giao thức trao đổi khóa ECDHE truyền thống chạy song song cùng Kyber (ML-KEM) theo chuẩn NIST.
-2.  **Phái sinh khóa lai bảo mật kép:** Khóa phiên chính sẽ được dẫn xuất từ hai bí mật chung thông qua hàm HKDF-SHA256:
+2.  **Phái sinh khóa lai bảo mật kép:** Session key chính sẽ được dẫn xuất từ hai bí mật chung thông qua hàm HKDF-SHA256:
     $$Master\_Session\_Key = HKDF(SS_{ECDHE} \parallel SS_{KYBER})$$
     Cơ chế lai này đảm bảo hệ thống vẫn an toàn tuyệt đối ngay cả khi một trong hai thuật toán bị bẻ gãy trong tương lai.
 
